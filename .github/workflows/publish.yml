@@ -18,10 +18,12 @@
 #      Trusted Publisher → GitHub Actions (owner oakimov, repo
 #      cursor-opencode-provider, workflow publish.yml, allow "npm publish").
 #
-# Publish flow (after setup):
-#   - Before bumping version: bun run generate:pricing && bun run check:pricing.
-#     Map any new Cursor display names, update the coverage fixture, and commit
-#     those files. An unmapped name fails this workflow and blocks the release.
+# Publish flow (after setup) — HARD STOP for agents/humans:
+#   - NEVER bump package.json version or push a v* tag until local
+#     `bun run generate:pricing && bun run check:pricing` both exit 0 in the
+#     same session. Map any new Cursor display names, update the coverage
+#     fixture, and commit those files FIRST. This workflow is a backstop;
+#     failing here after the tag exists means a forced retag (see v0.6.4).
 #   - Bump "version" in package.json, commit to main.
 #   - Push a tag matching the version (e.g. git tag v0.1.2 && git push --tags).
 #   - This workflow runs install → refresh Cursor pricing → coverage check →

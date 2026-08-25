@@ -4,7 +4,7 @@ Run this checklist before releasing changes to CreatePlan, SwitchMode, tool-cata
 
 ## Build/install preflight
 
-- [ ] Provider: `bun run generate:pricing && bun run check:pricing` (commit mapping/`pricing-data.ts` updates before any version bump)
+- [ ] Provider HARD STOP: `bun run generate:pricing && bun run check:pricing` must both exit 0; commit mapping/`pricing-data.ts` updates before any version bump or `v*` tag (do not tag first and rely on publish CI)
 - [ ] Provider: `bun test && bun run typecheck && bun run build`
 - [ ] Provider: `bun test test/architecture.test.ts` again **after** build (covers `dist/`)
 - [ ] OCP: `bun test ./test && bun run typecheck && bun run build`

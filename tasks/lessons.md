@@ -259,3 +259,12 @@
   removing fork handling from the provider, prove catalog, call, resume-id,
   result, path, and schema translation in OCP. This keeps architectural cleanup
   from silently deleting working compatibility.
+
+## 2026-08-25 — Pricing gate before every release
+
+- **CI regenerating pricing is a backstop, not permission to skip the local
+  gate.** Bumping/`v*` tagging before `bun run generate:pricing && bun run
+  check:pricing` succeeded locally produced a failed `v0.6.4` publish on an
+  unmapped `Legacy Enterprise Auto` docs row and forced a retag. Run the gate
+  in the same turn as the bump, commit mapping/`pricing-data.ts` first, and
+  treat “I’ll fix it after the tag” as forbidden.

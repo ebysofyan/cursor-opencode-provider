@@ -33,12 +33,24 @@ bun run check:pricing      # fixture coverage for known model ids
 
 Publish surface is `dist/` only (`files` in `package.json`). Always rebuild before testing a local `file://` OpenCode install.
 
-**Before any `package.json` version bump or `v*` tag**, verify Cursor pricing locally and commit the result. Tagged npm publishes (`.github/workflows/publish.yml`) and local `npm publish` (`prepublishOnly`) re-run `generate:pricing` from the live docs; an unmapped display name fails the job and blocks the release.
+## HARD STOP — release / version bump / tag gate (non-optional)
 
-1. `bun run generate:pricing` — must succeed against current Cursor docs.
-2. On `Unmapped pricing display name` / `Unmapped context display name`, add the name to `DISPLAY_NAME_TO_MODEL_ID` or `SKIP_DISPLAY_NAMES` in `scripts/generate-cursor-pricing.ts`, add any new wire id to `test/fixtures/cursor-pricing-models.txt`, and regenerate.
-3. `bun run check:pricing`
-4. Commit the mapping, fixture, and `src/pricing-data.ts` **before** bumping the version or pushing a tag.
+**Do not edit `package.json` `"version"`, create a `v*` tag, push a `v*` tag, or run `npm publish` until the pricing gate below has succeeded in *this* turn and any mapping/`pricing-data.ts` updates are committed.** Skipping it is a process failure, not an acceptable shortcut. CI regenerating pricing later is **not** a substitute: unmapped Cursor display names fail publish after the tag already exists, forcing retags and wasted release cycles (this happened on `v0.6.4`).
+
+**Forbidden until the gate passes:**
+- bumping `"version"` in `package.json`
+- `git commit` of a version bump
+- `git tag v…` / retag / `git push --tags` / `git push origin v…`
+- `npm publish` / asking the user to publish
+
+**Required order (no exceptions, no “I’ll fix pricing after the tag”):**
+1. `bun run generate:pricing` — must exit 0 against **live** Cursor docs in this session (do not assume a prior run is still valid).
+2. On any `Unmapped pricing/context/capability display name`, update `DISPLAY_NAME_TO_MODEL_ID` or `SKIP_DISPLAY_NAMES` in `scripts/generate-cursor-pricing.ts`, add any new wire id to `test/fixtures/cursor-pricing-models.txt`, regenerate, and **commit that fix first**.
+3. `bun run check:pricing` — must exit 0.
+4. Commit mapping / fixture / `src/pricing-data.ts` changes **before** the version bump commit.
+5. Only then bump version, commit, tag, and push.
+
+If the user asks only to “bump / tag / publish”, still run steps 1–4 first and report the pricing result before touching the version.
 
 ## Architecture
 
@@ -122,6 +134,7 @@ Two 1.x hooks have no 2.0 equivalent and are emulated:
 - Do not commit unless the user (or an explicit implementation task) asks.
 - Keep README accurate when behavior users care about changes (auth, env vars, architecture, limitations).
 - Tests live in `test/` (Bun test). Mirror protocol/context behavior with unit tests when changing encode/decode or discovery.
+- **Release gate:** any version bump / `v*` tag / publish request must obey the HARD STOP pricing section above. Do not “bump first, check pricing if CI fails.”
 
 ## Context this provider sends to Cursor
 
@@ -137,6 +150,7 @@ When changing rule/skill discovery, keep parity with OpenCode behavior and updat
 
 ## Critical behavioral constraints
 
+- **Release / pricing gate:** before any version bump, `v*` tag, tag push, or publish, run `bun run generate:pricing` and `bun run check:pricing` successfully in this turn and commit mapping/`pricing-data.ts` updates first. See HARD STOP section above. CI re-running pricing is validation, not permission to skip the local gate.
 - **Agent host:** resolve via `GetServerConfig` (`agentUrlConfig.agentnUrl`). Memoize once per process in memory; never write to disk; never silently fall back to a legacy global host on failure.
 - **URL options:** `apiBaseURL` (auth/models/GetServerConfig) vs `agentBaseURL` (Run stream) are separate. Legacy `baseURL` aliases `agentBaseURL` only.
 - **Host validation:** explicit agent overrides and GetServerConfig results must be HTTPS `*.cursor.sh`; reject others.
