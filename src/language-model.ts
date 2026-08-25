@@ -143,7 +143,7 @@ import {
   retrySuppressedError,
   toCursorProviderError,
 } from "./errors.js"
-import { readCache, cacheFilePath, resolveVariantParameters, paramsImplyMaxMode, extractCursorVariantParameters, resolveCursorWireModelId, type ModelInfo } from "./models.js"
+import { readCache, cacheFilePath, resolveVariantParameters, resolveVariantMaxMode, extractCursorVariantParameters, resolveCursorWireModelId, type ModelInfo } from "./models.js"
 import { getOrBuildRequestContext } from "./context/frozen.js"
 import { workspaceRootFromRequestContext } from "./context/env.js"
 import {
@@ -985,9 +985,12 @@ async function startSession(
     maxMode: hintMaxMode,
     picked,
   })
-  // Wire max_mode from the hint *or* a 1m context pick — OpenCode's variant
-  // paramMap does not include a maxMode key when the user selects 1m.
-  const maxMode = hintMaxMode || paramsImplyMaxMode(parameterValues)
+  // An explicit pick owns the context tier; otherwise honor the maxMode hint.
+  // OpenCode's variant paramMap does not include maxMode when the user selects 1m.
+  const maxMode = resolveVariantMaxMode(parameterValues, {
+    picked,
+    maxMode: hintMaxMode,
+  })
 
   // Do NOT pass callOptions.abortSignal into the h2 Run stream. OpenCode aborts
   // that signal when a turn ends with tool-calls; the Cursor stream must stay

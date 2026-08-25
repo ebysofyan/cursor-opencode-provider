@@ -12,6 +12,7 @@ import {
   refreshModelCache,
   resolveVariantParameters,
   paramsImplyMaxMode,
+  resolveVariantMaxMode,
   extractCursorVariantParameters,
   writeCache,
   CURSOR_VARIANT_PARAMETERS_KEY,
@@ -613,6 +614,53 @@ describe("resolveVariantParameters (picked variant + max mode)", () => {
     expect(() => resolveVariantParameters(opus, { picked: [...valid, valid[0]!] })).toThrow(
       /exact parameter tuple/,
     )
+  })
+
+  it("does not let a reasoningEffort hint override an explicitly picked variant", () => {
+    const picked = [
+      { id: "context", value: "1m" },
+      { id: "effort", value: "high" },
+      { id: "fast", value: "false" },
+    ]
+    const params = resolveVariantParameters(opus, { picked, reasoningEffort: "medium" })
+    expect(params).toEqual(picked)
+  })
+
+  it("sets max mode for a picked 1m variant despite a false hint", () => {
+    const picked = [
+      { id: "context", value: "1m" },
+      { id: "effort", value: "low" },
+      { id: "fast", value: "false" },
+    ]
+    const params = resolveVariantParameters(opus, { picked, maxMode: false })
+    expect(resolveVariantMaxMode(params, { picked, maxMode: false })).toBe(true)
+  })
+
+  it("does not let a true maxMode hint override a picked base variant", () => {
+    const picked = [
+      { id: "context", value: "300k" },
+      { id: "effort", value: "high" },
+      { id: "fast", value: "false" },
+    ]
+    const params = resolveVariantParameters(opus, { picked, maxMode: true })
+    expect(params).toEqual(picked)
+    expect(resolveVariantMaxMode(params, { picked, maxMode: true })).toBe(false)
+  })
+
+  it("uses max and effort hints to select an unpicked 1m variant", () => {
+    const params = resolveVariantParameters(opus, {
+      reasoningEffort: "high",
+      maxMode: true,
+    })
+    expect(params.find((p) => p.id === "context")?.value).toBe("1m")
+    expect(params.find((p) => p.id === "effort")?.value).toBe("high")
+    expect(resolveVariantMaxMode(params, { maxMode: true })).toBe(true)
+  })
+
+  it("keeps an effort-only unpicked resolution out of max mode", () => {
+    const params = resolveVariantParameters(opus, { reasoningEffort: "high" })
+    expect(params.find((p) => p.id === "effort")?.value).toBe("high")
+    expect(resolveVariantMaxMode(params)).toBe(false)
   })
 })
 

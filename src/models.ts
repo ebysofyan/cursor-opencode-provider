@@ -255,6 +255,17 @@ export function paramsImplyMaxMode(params: ModelParameterValue[]): boolean {
   )
 }
 
+/**
+ * Resolve the request-level max_mode bit. An explicit variant pick owns the
+ * context tier; otherwise a standalone maxMode hint may select max mode.
+ */
+export function resolveVariantMaxMode(
+  params: ModelParameterValue[],
+  opts: { picked?: ModelParameterValue[]; maxMode?: boolean } = {},
+): boolean {
+  return paramsImplyMaxMode(params) || (opts.picked === undefined && opts.maxMode === true)
+}
+
 // Cursor encodes a model's context window as a variant parameter `id: "context"`
 // whose value is a tier string — the same 200k / 272k / 300k / 1m the IDE's
 // picker shows. The base tier rides on the default non-max variant; the 1M
@@ -466,10 +477,7 @@ export function resolveVariantParameters(
         v.parameterValues.every((parameter) => pickedById.get(parameter.id) === parameter.value),
     )
     if (exact) {
-      return buildRequestedModelParams(exact.parameterValues, {
-        reasoningEffort: opts.reasoningEffort,
-        maxMode: wantMax,
-      })
+      return buildRequestedModelParams(exact.parameterValues)
     }
     throw new CursorVariantSelectionError(
       `is stale for model ${JSON.stringify(model.id)}: its exact parameter tuple is unavailable`,

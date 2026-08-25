@@ -193,11 +193,12 @@ describe("buildRunRequest", () => {
     expect(decoded.run_request.action.user_message_action.request_context?.tools ?? []).toHaveLength(0)
   })
 
-  it("includes parameter values when provided", () => {
+  it("includes parameter values and max mode when provided", () => {
     const data = buildRunRequest({
       text: "Hi",
       modelId: "test-model",
       conversationId: "conv-2",
+      maxMode: true,
       parameterValues: [
         { id: "effort", value: "high" },
         { id: "thinking", value: "true" },
@@ -209,6 +210,7 @@ describe("buildRunRequest", () => {
     expect(params).toHaveLength(2)
     expect(params[0].id).toBe("effort")
     expect(params[0].value).toBe("high")
+    expect(decoded.run_request.requested_model?.max_mode).toBe(true)
   })
 
   it("delivers system prompt via conversation_state, not custom_system_prompt", () => {
