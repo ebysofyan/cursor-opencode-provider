@@ -173,15 +173,15 @@ export const CURSOR_MODEL_COSTS = {
     "cache_write": 0.25
   },
   "gpt-5.6-sol": {
-    "input": 5,
-    "output": 30,
-    "cache_read": 0.5,
-    "cache_write": 6.25,
+    "input": 4,
+    "output": 20,
+    "cache_read": 0.4,
+    "cache_write": 5,
     "context_over_200k": {
-      "input": 10,
-      "output": 30,
-      "cache_read": 1,
-      "cache_write": 12.5
+      "input": 8,
+      "output": 20,
+      "cache_read": 0.8,
+      "cache_write": 10
     }
   },
   "gpt-5.6-terra": {
@@ -363,9 +363,6 @@ export const CURSOR_MODEL_CAPABILITIES = {
   },
   "composer-2.5": {
     "supportsImages": true
-  },
-  "default": {
-    "supportsImages": false
   },
   "gemini-2.5-flash": {
     "supportsImages": true

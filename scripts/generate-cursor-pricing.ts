@@ -102,6 +102,8 @@ const SKIP_DISPLAY_NAMES = new Set([
   "GPT-5.1 Codex Max",
   "GPT-5.1 Codex Mini",
   "GPT-5.2 Codex",
+  // Enterprise-only Auto pricing row; not a catalog model we expose.
+  "Legacy Enterprise Auto",
 ])
 
 /**
