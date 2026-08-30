@@ -81,6 +81,16 @@ export const CURSOR_MODEL_COSTS = {
     "cache_read": 0.2,
     "cache_write": 2.5
   },
+  "composer-2.5": {
+    "input": 0.5,
+    "output": 2.5,
+    "cache_read": 0.2
+  },
+  "composer-2.5-fast": {
+    "input": 3,
+    "output": 15,
+    "cache_read": 0.5
+  },
   "gemini-2.5-flash": {
     "input": 0.3,
     "output": 2.5,
@@ -189,6 +199,26 @@ export const CURSOR_MODEL_COSTS = {
     "output": 12,
     "cache_read": 0.2,
     "cache_write": 2.5
+  },
+  "grok-4.5": {
+    "input": 2,
+    "output": 6,
+    "cache_read": 0.5
+  },
+  "grok-4.5-fast": {
+    "input": 4,
+    "output": 18,
+    "cache_read": 1
+  },
+  "grok-4.6": {
+    "input": 2,
+    "output": 6,
+    "cache_read": 0.5
+  },
+  "grok-4.6-fast": {
+    "input": 4,
+    "output": 12,
+    "cache_read": 1
   },
   "kimi-k2.7-code": {
     "input": 0.95,

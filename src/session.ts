@@ -251,8 +251,9 @@ export type CursorSession = {
    */
   allowTools: boolean
   /**
-   * Best-effort held-Run activity counters used only for diagnostics. AI SDK
-   * accounting comes from the request-local final TurnEnded, never this estimate.
+   * Best-effort held-Run activity counters used only for diagnostics. Displayed
+   * AI SDK usage comes from checkpoint occupancy (tool steps) and TurnEnded
+   * (stop); this estimate is never sent to OpenCode.
    */
   usageEstimate: {
     inputTokens: number
@@ -283,6 +284,7 @@ export type CursorSession = {
   semanticDeadlineAt: number
   closeError: CursorProviderError | null
   closed: boolean
+  reopenWithUserMessage?: (text: string) => Promise<void>
 }
 
 type Tombstone = {
@@ -384,11 +386,7 @@ export class SessionManager {
       this.byOpenCodeSessionId.set(session.openCodeSessionId, session)
     }
     this.enforceOpenSessionCap(session)
-    const unsubscribe = session.stream.onTerminal?.(
-      (event) => this.onStreamTerminal(session, event),
-    ) ?? (() => {})
-    if (session.closed) unsubscribe()
-    else session.terminalUnsubscribe = unsubscribe
+    this.subscribeTerminal(session)
   }
 
   private isPumping(session: CursorSession): boolean {
@@ -603,6 +601,36 @@ export class SessionManager {
     session.deferredTerminalReason = null
     if (deferred) this.close(session, deferred)
     return true
+  }
+
+  /**
+   * Swap the live bidi Run while a pump is still pulling frames.
+   * Callers must cancel the session heartbeat and wait for the old stream's
+   * write chain before this, so an in-flight heartbeat cannot close the session.
+   */
+  replaceStream(session: CursorSession, next: BidiStream): void {
+    if (session.closed) throw new CursorProtocolError("Cannot replace stream on a closed Cursor session")
+    session.heartbeatCancel?.()
+    session.terminalUnsubscribe?.()
+    session.terminalUnsubscribe = null
+    session.deferredTerminalReason = null
+    const old = session.stream
+    session.stream = next
+    session.frames = next.frames()[Symbol.asyncIterator]()
+    this.subscribeTerminal(session)
+    try { old.destroy() } catch { /* already closed */ }
+  }
+
+  private subscribeTerminal(session: CursorSession): void {
+    const boundStream = session.stream
+    const unsubscribe = boundStream.onTerminal?.(
+      (event) => {
+        if (session.stream !== boundStream) return
+        this.onStreamTerminal(session, event)
+      },
+    ) ?? (() => {})
+    if (session.closed) unsubscribe()
+    else session.terminalUnsubscribe = unsubscribe
   }
 
   private key(sessionId: string, execId: number): string {

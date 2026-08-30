@@ -770,6 +770,80 @@ export function createMessageTypes(): protobuf.Root {
     { id: 3, name: "error", type: "string" },
   ])
 
+  // ── Soft-deny stubs for known unsupported Cursor-native exec variants ──
+  // These are encode-only: enough to emit a populated deny, not full success.
+  // Canonical field numbers from agent.proto ExecClientMessage.
+  addType(root, "ShellResult", [
+    { id: 4, name: "rejected", type: "ShellRejected" },
+  ], [{ name: "result", fields: ["rejected"] }])
+  addType(root, "DiagnosticsError", [
+    { id: 1, name: "path", type: "string" },
+    { id: 2, name: "error", type: "string" },
+  ])
+  addType(root, "DiagnosticsResult", [
+    { id: 2, name: "error", type: "DiagnosticsError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "FetchError", [
+    { id: 1, name: "url", type: "string" },
+    { id: 2, name: "error", type: "string" },
+  ])
+  addType(root, "FetchResult", [
+    { id: 2, name: "error", type: "FetchError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "RecordScreenFailure", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(root, "RecordScreenResult", [
+    { id: 4, name: "failure", type: "RecordScreenFailure" },
+  ], [{ name: "result", fields: ["failure"] }])
+  addType(root, "ComputerUseError", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(root, "ComputerUseResult", [
+    { id: 2, name: "error", type: "ComputerUseError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "WriteShellStdinError", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(root, "WriteShellStdinResult", [
+    { id: 2, name: "error", type: "WriteShellStdinError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "SubagentAwaitError", [
+    { id: 1, name: "agent_id", type: "string" },
+    { id: 2, name: "error", type: "string" },
+  ])
+  addType(root, "SubagentAwaitResult", [
+    { id: 4, name: "error", type: "SubagentAwaitError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "SmartModeClassifierError", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(root, "SmartModeClassifierResult", [
+    { id: 2, name: "error", type: "SmartModeClassifierError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "CanvasDiagnosticsError", [
+    { id: 1, name: "path", type: "string" },
+    { id: 2, name: "error", type: "string" },
+  ])
+  addType(root, "CanvasDiagnosticsResult", [
+    { id: 2, name: "error", type: "CanvasDiagnosticsError" },
+  ], [{ name: "result", fields: ["error"] }])
+  addType(root, "ShellAllowlistPrecheckResult", [
+    { id: 1, name: "allowlisted", type: "bool" },
+  ])
+  addType(root, "McpAllowlistPrecheckResult", [
+    { id: 1, name: "allowlisted", type: "bool" },
+  ])
+  addType(root, "WebFetchAllowlistPrecheckResult", [
+    { id: 1, name: "allowlisted", type: "bool" },
+  ])
+  addType(root, "ForceBackgroundShellResult", [
+    { id: 1, name: "status", type: "uint32" },
+  ])
+  addType(root, "ForceBackgroundSubagentResult", [
+    { id: 1, name: "status", type: "uint32" },
+  ])
+
   // Cursor's non-blocking shell path is a separate exec variant from the
   // foreground ShellStream above. The host only needs the fields used at the
   // OpenCode boundary; protobufjs safely skips the richer classifier/approval
@@ -1185,19 +1259,34 @@ export function createMessageTypes(): protobuf.Root {
       { id: 1, name: "id", type: "uint32" },
       { id: 15, name: "exec_id", type: "string" },
       { id: 39, name: "local_execution_time_ms", type: "uint64" },
+      { id: 2, name: "shell_result", type: "ShellResult" },
       { id: 3, name: "write_result", type: "WriteResult" },
       { id: 4, name: "delete_result", type: "DeleteResult" },
       { id: 5, name: "grep_result", type: "GrepResult" },
       { id: 7, name: "read_result", type: "ReadResult" },
       { id: 8, name: "ls_result", type: "LsResult" },
+      { id: 9, name: "diagnostics_result", type: "DiagnosticsResult" },
       { id: 10, name: "request_context_result", type: "RequestContextResult" },
       { id: 11, name: "mcp_result", type: "McpResult" },
       { id: 14, name: "shell_stream", type: "ShellStream" },
       { id: 16, name: "background_shell_spawn_result", type: "BackgroundShellSpawnResult" },
       { id: 17, name: "list_mcp_resources_exec_result", type: "ListMcpResourcesExecResult" },
       { id: 18, name: "read_mcp_resource_exec_result", type: "ReadMcpResourceExecResult" },
+      { id: 20, name: "fetch_result", type: "FetchResult" },
+      { id: 21, name: "record_screen_result", type: "RecordScreenResult" },
+      { id: 22, name: "computer_use_result", type: "ComputerUseResult" },
+      { id: 23, name: "write_shell_stdin_result", type: "WriteShellStdinResult" },
       { id: 28, name: "subagent_result", type: "SubagentResult" },
+      { id: 29, name: "redacted_read_result", type: "ReadResult" },
+      { id: 30, name: "force_background_shell_result", type: "ForceBackgroundShellResult" },
+      { id: 31, name: "force_background_subagent_result", type: "ForceBackgroundSubagentResult" },
       { id: 36, name: "mcp_state_exec_result", type: "McpStateExecResult" },
+      { id: 37, name: "subagent_await_result", type: "SubagentAwaitResult" },
+      { id: 38, name: "smart_mode_classifier_result", type: "SmartModeClassifierResult" },
+      { id: 40, name: "canvas_diagnostics_result", type: "CanvasDiagnosticsResult" },
+      { id: 41, name: "shell_allowlist_precheck_result", type: "ShellAllowlistPrecheckResult" },
+      { id: 42, name: "mcp_allowlist_precheck_result", type: "McpAllowlistPrecheckResult" },
+      { id: 43, name: "web_fetch_allowlist_precheck_result", type: "WebFetchAllowlistPrecheckResult" },
       { id: 46, name: "pi_read_result", type: "PiReadExecResult" },
       { id: 47, name: "pi_bash_result", type: "PiBashExecResult" },
       { id: 48, name: "pi_edit_result", type: "PiEditExecResult" },
@@ -1207,10 +1296,15 @@ export function createMessageTypes(): protobuf.Root {
       { id: 52, name: "pi_ls_result", type: "PiLsExecResult" },
     ],
     [{ name: "result", fields: [
-      "write_result", "delete_result", "grep_result", "read_result", "ls_result",
-      "request_context_result", "mcp_result", "shell_stream", "background_shell_spawn_result",
-      "list_mcp_resources_exec_result", "read_mcp_resource_exec_result", "mcp_state_exec_result",
-      "subagent_result",
+      "shell_result", "write_result", "delete_result", "grep_result", "read_result", "ls_result",
+      "diagnostics_result", "request_context_result", "mcp_result", "shell_stream", "background_shell_spawn_result",
+      "list_mcp_resources_exec_result", "read_mcp_resource_exec_result",
+      "fetch_result", "record_screen_result", "computer_use_result", "write_shell_stdin_result",
+      "subagent_result", "redacted_read_result",
+      "force_background_shell_result", "force_background_subagent_result",
+      "mcp_state_exec_result",
+      "subagent_await_result", "smart_mode_classifier_result", "canvas_diagnostics_result",
+      "shell_allowlist_precheck_result", "mcp_allowlist_precheck_result", "web_fetch_allowlist_precheck_result",
       "pi_read_result", "pi_bash_result", "pi_edit_result", "pi_write_result",
       "pi_grep_result", "pi_find_result", "pi_ls_result",
     ] }],

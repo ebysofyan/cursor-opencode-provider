@@ -77,3 +77,9 @@ export function describeCursorExecVariant(field: number | undefined): string {
   if (!variant) return `unknown request field #${field}`
   return `${variant.requestName} (request field #${variant.requestField}, expected result ${variant.resultName} field #${variant.resultField}, handling=${variant.handling})`
 }
+
+/**
+ * `ForceBackgroundShellResult` / `ForceBackgroundSubagentResult` status.
+ * Cursor CLI `ForceBackgroundStatus`: 0 unspecified, 1 ok, 2 error.
+ */
+export const FORCE_BACKGROUND_STATUS_ERROR = 2

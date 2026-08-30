@@ -166,10 +166,12 @@ export async function refreshAccessToken(
 // Cache JWTs obtained via API-key exchange so doStream doesn't re-exchange
 // on every turn when the caller only supplied `apiKey`.
 const _apiKeyTokenCache = new Map<string, TokenPair>()
+const inflightBearer = new Map<string, Promise<string>>()
 
 /** Clear the apiKey→JWT cache (tests). */
 export function clearBearerTokenCache(): void {
   _apiKeyTokenCache.clear()
+  inflightBearer.clear()
 }
 
 /**
@@ -200,19 +202,33 @@ export async function resolveBearerToken(input: {
   if (cached && !isExpiringSoon(cached.accessToken)) {
     return cached.accessToken
   }
-  if (cached) {
-    try {
-      const refreshed = await refreshAccessToken(cached.refreshToken, baseUrl)
-      _apiKeyTokenCache.set(input.apiKey, refreshed)
-      return refreshed.accessToken
-    } catch {
-      // Fall through to a fresh exchange.
+
+  const inflightKey = `${baseUrl}\0${input.apiKey}`
+  const existing = inflightBearer.get(inflightKey)
+  if (existing) return existing
+
+  async function refreshOrExchange(): Promise<string> {
+    if (cached) {
+      try {
+        const refreshed = await refreshAccessToken(cached.refreshToken, baseUrl)
+        _apiKeyTokenCache.set(input.apiKey!, refreshed)
+        return refreshed.accessToken
+      } catch {
+        // Fall through to a fresh exchange.
+      }
     }
+    const pair = await exchangeApiKey(input.apiKey!, baseUrl)
+    _apiKeyTokenCache.set(input.apiKey!, pair)
+    return pair.accessToken
   }
 
-  const pair = await exchangeApiKey(input.apiKey, baseUrl)
-  _apiKeyTokenCache.set(input.apiKey, pair)
-  return pair.accessToken
+  const pending = refreshOrExchange()
+  inflightBearer.set(inflightKey, pending)
+  try {
+    return await pending
+  } finally {
+    if (inflightBearer.get(inflightKey) === pending) inflightBearer.delete(inflightKey)
+  }
 }
 
 // ── Mode C: PKCE browser login ──

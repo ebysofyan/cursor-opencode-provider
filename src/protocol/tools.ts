@@ -6,7 +6,11 @@ import { encodeJsonAsValue, decodeStructEntriesToJson, readAllFields } from "./s
 import { buildEnv } from "../context/env.js"
 import { ensureOpencodeProjectDir } from "../context/paths.js"
 import { trace, traceRequestContextPaths } from "../debug.js"
-import { cursorExecVariantByRequestName } from "./exec-variants.js"
+import {
+  cursorExecVariantByRequestName,
+  FORCE_BACKGROUND_STATUS_ERROR,
+  type CursorExecVariant,
+} from "./exec-variants.js"
 import {
   APPLY_PATCH_TOOL,
   buildAddFilePatch,
@@ -1616,6 +1620,151 @@ export function buildExecStreamClose(execId: number): Uint8Array {
       stream_close: { id: execId },
     },
   })
+}
+
+export function buildUnsupportedExecDeny(input: {
+  execId: number
+  variant: CursorExecVariant
+  reason: string
+}): Uint8Array[] {
+  const { execId, variant, reason } = input
+  const resultName = variant.resultName
+  const frames: Uint8Array[] = []
+  const throwFrame = (msg: string): Uint8Array =>
+    encodeMessage("AgentClientMessage", {
+      exec_client_control_message: {
+        throw: { id: execId, error: msg },
+      },
+    })
+
+  switch (resultName) {
+    case "shell_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            shell_result: { rejected: { reason } },
+          },
+        }),
+      )
+      break
+    case "diagnostics_result":
+    case "canvas_diagnostics_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            [resultName]: { error: { path: "", error: reason } },
+          },
+        }),
+      )
+      break
+    case "fetch_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            fetch_result: { error: { url: "", error: reason } },
+          },
+        }),
+      )
+      break
+    case "record_screen_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            record_screen_result: { failure: { error: reason } },
+          },
+        }),
+      )
+      break
+    case "computer_use_result":
+    case "write_shell_stdin_result":
+    case "smart_mode_classifier_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            [resultName]: { error: { error: reason } },
+          },
+        }),
+      )
+      break
+    case "redacted_read_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            redacted_read_result: { error: { path: "", error: reason } },
+          },
+        }),
+      )
+      break
+    case "subagent_await_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            subagent_await_result: { error: { error: reason } },
+          },
+        }),
+      )
+      break
+    case "shell_allowlist_precheck_result":
+    case "mcp_allowlist_precheck_result":
+    case "web_fetch_allowlist_precheck_result":
+      // Typed precheck result is a bool, not a reason string. Encoding
+      // `{allowlisted:false}` selects the ExecClientMessage oneof; protobufjs
+      // writes field 1 as varint 0 so Cursor decodes the deny rather than an
+      // empty/unspecified precheck.
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            [resultName]: { allowlisted: false },
+          },
+        }),
+      )
+      break
+    case "force_background_shell_result":
+    case "force_background_subagent_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            [resultName]: { status: FORCE_BACKGROUND_STATUS_ERROR },
+          },
+        }),
+      )
+      break
+    case "execute_hook_result":
+    case "git_diff_response":
+      // agent.proto has no populated error oneof we can emit for these two;
+      // Cursor CLI answers them through exec_client_control_message.throw.
+      frames.push(throwFrame(reason))
+      frames.push(buildExecStreamClose(execId))
+      return frames
+    default:
+      // Fallback for any future unsupported variant without a dedicated shape:
+      // typed error when possible, else throw. Unknown shapes should hard-fail
+      // at the pump, so this path is not expected for the 17 known rows.
+      frames.push(throwFrame(reason))
+      frames.push(buildExecStreamClose(execId))
+      return frames
+  }
+
+  frames.push(buildExecStreamClose(execId))
+  return frames
 }
 
 /**

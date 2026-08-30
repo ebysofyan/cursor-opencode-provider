@@ -6,6 +6,8 @@ import {
   formatCursorTokenCategories,
   formatTurnUsageValidation,
   flatUsageFromV3,
+  occupancyUsageFromTokenDetails,
+  OPENCODE_DISPLAY_ONLY_COST_METADATA,
   turnEndedCounter,
 } from "../src/usage.js"
 
@@ -185,6 +187,57 @@ describe("buildLanguageModelV3UsageFromTurnEnded", () => {
     expect(validation).toContain("opencodeProjectedTotal=0 opencodeMatch=true")
     expect(validation).toContain("breakdownMatch=unavailable")
     expect(validation).toContain("cacheRatioMatch=unavailable")
+  })
+})
+
+describe("occupancyUsageFromTokenDetails", () => {
+  it("keeps OpenCode's Copilot cost override at zero so occupancy snapshots are not billed", () => {
+    expect(OPENCODE_DISPLAY_ONLY_COST_METADATA).toEqual({
+      copilot: { totalNanoAiu: 0 },
+    })
+  })
+
+  it("places occupancy on a snapshot whose TUI sum equals usedTokens and output > 0", () => {
+    const usage = occupancyUsageFromTokenDetails(
+      { usedTokens: 153_744, maxTokens: 256_000 },
+      { usedTokens: 123_651, maxTokens: 256_000 },
+    )
+    expect(usage.outputTokens?.total).toBe(1)
+    expect(usage.outputTokens?.text).toBe(1)
+    expect(usage.outputTokens?.reasoning).toBe(0)
+    expect((usage.inputTokens?.total ?? 0) + (usage.outputTokens?.total ?? 0)).toBe(153_744)
+    expect(usage.inputTokens?.cacheRead).toBe(123_651)
+    expect(usage.inputTokens?.cacheWrite).toBe(0)
+    expect(usage.inputTokens?.noCache).toBe(153_744 - 1 - 123_651)
+    const validation = formatTurnUsageValidation(
+      {
+        inputTokens: 153_744,
+        outputTokens: 1,
+        cacheRead: 123_651,
+        cacheWrite: 0,
+        reasoningTokens: 0,
+      },
+      usage,
+      { usedTokens: 153_744, maxTokens: 256_000 },
+      "checkpoint-current-run",
+    )
+    expect(validation).toContain("status=ok")
+    expect(validation).toContain("sentTotal=153744")
+    expect(validation).toContain("opencodeProjectedTotal=153744")
+  })
+
+  it("still totals usedTokens when no prior occupancy is known", () => {
+    const usage = occupancyUsageFromTokenDetails({ usedTokens: 40, maxTokens: 256_000 })
+    expect(usage.outputTokens?.total).toBe(1)
+    expect(usage.inputTokens?.total).toBe(39)
+    expect(usage.inputTokens?.cacheRead).toBe(0)
+  })
+
+  it("emits empty usage when occupancy is not yet known", () => {
+    expect(occupancyUsageFromTokenDetails({ usedTokens: 0, maxTokens: 256_000 })).toEqual({
+      inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 0, text: 0, reasoning: 0 },
+    })
   })
 })
 

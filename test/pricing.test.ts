@@ -7,11 +7,16 @@ import {
   applyCursorModelCost,
   checkCursorPricingCoverage,
   getCursorModelCost,
+  hasCursorFastPricing,
   isOpenCodeModelCost,
   toOpenCode2Costs,
   validateOpenCodeModelCost,
   wireModelIdForPricing,
 } from "../src/pricing.js"
+import {
+  buildPricingTable,
+  catalogIdForPricingDisplayName,
+} from "../scripts/generate-cursor-pricing.js"
 
 describe("pricing", () => {
   it("maps third-party Cursor docs rates onto wire model ids", () => {
@@ -48,9 +53,54 @@ describe("pricing", () => {
     })
   })
 
-  it("retains tiered rates for synthetic -1m catalog ids", () => {
+  it("maps Cursor Models pool rates, including Fast variants", () => {
+    expect(getCursorModelCost("grok-4.6")).toEqual({
+      input: 2,
+      output: 6,
+      cache_read: 0.5,
+    })
+    expect(getCursorModelCost("grok-4.6-fast")).toEqual({
+      input: 4,
+      output: 12,
+      cache_read: 1,
+    })
+    expect(getCursorModelCost("grok-4.5")).toEqual({
+      input: 2,
+      output: 6,
+      cache_read: 0.5,
+    })
+    expect(getCursorModelCost("grok-4.5-fast")).toEqual({
+      input: 4,
+      output: 18,
+      cache_read: 1,
+    })
+    expect(getCursorModelCost("composer-2.5")).toEqual({
+      input: 0.5,
+      output: 2.5,
+      cache_read: 0.2,
+    })
+    expect(getCursorModelCost("composer-2.5-fast")).toEqual({
+      input: 3,
+      output: 15,
+      cache_read: 0.5,
+    })
+  })
+
+  it("strips synthetic -1m suffixes, including -1m-fast", () => {
     expect(wireModelIdForPricing("claude-sonnet-4-1m")).toEqual({
       baseId: "claude-sonnet-4",
+      longContextEntry: true,
+    })
+    expect(wireModelIdForPricing("composer-2.5-fast")).toEqual({
+      baseId: "composer-2.5-fast",
+      longContextEntry: false,
+    })
+    expect(wireModelIdForPricing("composer-2.5-1m-fast")).toEqual({
+      baseId: "composer-2.5-fast",
+      longContextEntry: true,
+    })
+    expect(wireModelIdForPricing("composer-2.5-1m-2-fast")).toEqual({
+      baseId: "composer-2.5-fast",
       longContextEntry: true,
     })
     expect(getCursorModelCost("claude-sonnet-4-1m")).toEqual({
@@ -65,13 +115,64 @@ describe("pricing", () => {
         cache_write: 7.5,
       },
     })
+    expect(getCursorModelCost("composer-2.5-1m-fast")).toEqual(
+      getCursorModelCost("composer-2.5-fast"),
+    )
   })
 
-  it("leaves Auto / Composer / Grok unpriced when docs omit rates", () => {
+  it("splits Fast catalog pricing only when Cursor publishes a distinct Fast rate", () => {
+    expect(hasCursorFastPricing("composer-2.5")).toBe(true)
+    expect(hasCursorFastPricing("grok-4.5")).toBe(true)
+    expect(hasCursorFastPricing("grok-4.6")).toBe(true)
+    expect(hasCursorFastPricing("claude-opus-4-8")).toBe(false)
+    expect(hasCursorFastPricing("claude-sonnet-4-5")).toBe(false)
+  })
+
+  it("maps Cursor Models (Fast) display names onto synthetic catalog ids", () => {
+    expect(catalogIdForPricingDisplayName("Composer 2.5")).toBe("composer-2.5")
+    expect(catalogIdForPricingDisplayName("Composer 2.5 (Fast)")).toBe("composer-2.5-fast")
+    expect(catalogIdForPricingDisplayName("Grok 4.6 (Fast)")).toBe("grok-4.6-fast")
+    expect(catalogIdForPricingDisplayName("Unknown (Fast)")).toBeUndefined()
+  })
+
+  it("imports Fast rows from the Cursor Models table without folding them into Other Models", () => {
+    const markdown = `
+## Cursor Models
+
+| Model | Provider | Input | Cache write | Cache read | Output |
+| --- | --- | --- | --- | --- | --- |
+| Composer 2.5 | Cursor | $0.5 | - | $0.2 | $2.5 |
+| Composer 2.5 (Fast) | Cursor | $3 | - | $0.5 | $15 |
+| Grok 4.6 | Cursor | $2 | - | $0.5 | $6 |
+| Grok 4.6 (Fast) | Cursor | $4 | - | $1 | $12 |
+
+## Plans
+
+| Plan | Price |
+| --- | --- |
+| Pro | $20 |
+
+## Other Models
+
+### Model pricing
+
+| Model | Provider | Input | Cache write | Cache read | Output | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude 4 Sonnet | Anthropic | $3 | $3.75 | $0.3 | $15 | |
+| Claude 4.7 Opus (fast mode) | Anthropic | $10 | $12.5 | $1 | $50 | skip |
+`
+
+    expect(buildPricingTable(markdown)).toEqual({
+      "claude-sonnet-4": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+      "composer-2.5": { input: 0.5, output: 2.5, cache_read: 0.2 },
+      "composer-2.5-fast": { input: 3, output: 15, cache_read: 0.5 },
+      "grok-4.6": { input: 2, output: 6, cache_read: 0.5 },
+      "grok-4.6-fast": { input: 4, output: 12, cache_read: 1 },
+    })
+  })
+
+  it("leaves Auto unpriced when docs omit an Auto-specific rate", () => {
     expect(getCursorModelCost("default")).toBeUndefined()
-    expect(getCursorModelCost("composer-2.5")).toBeUndefined()
-    expect(getCursorModelCost("grok-4.5")).toBeUndefined()
-    expect(getCursorModelCost("grok-4.6")).toBeUndefined()
     expect(applyCursorModelCost("default", { name: "Auto" })).toEqual({ name: "Auto" })
   })
 

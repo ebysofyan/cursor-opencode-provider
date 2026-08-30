@@ -1,11 +1,17 @@
 import { describe, expect, it } from "bun:test"
 import {
   CURSOR_EXEC_VARIANTS,
+  FORCE_BACKGROUND_STATUS_ERROR,
   cursorExecVariantByRequestField,
   cursorExecVariantByRequestName,
   describeCursorExecVariant,
 } from "../src/protocol/exec-variants.js"
-import { detectExecVariantField, mapExecServerToToolName } from "../src/protocol/tools.js"
+import {
+  buildUnsupportedExecDeny,
+  detectExecVariantField,
+  mapExecServerToToolName,
+} from "../src/protocol/tools.js"
+import { readAllFields, type RawField } from "../src/protocol/struct.js"
 
 // Independent transcription of Cursor CLI generated agent/v1/exec_pb.js.
 // Tuples are [request field, request name, result field, result name].
@@ -116,5 +122,119 @@ describe("canonical Cursor exec variant map", () => {
     )
     expect(describeCursorExecVariant(99)).toBe("unknown request field #99")
     expect(describeCursorExecVariant(undefined)).toBe("unknown request field")
+  })
+})
+
+type DenyWireExpect =
+  | {
+      requestName: string
+      kind: "result"
+      resultField: number
+      innerOneofField: number
+      innerVarint?: { field: number; value: number }
+    }
+  | { requestName: string; kind: "throw" }
+
+/**
+ * Independent of protobufjs decode against this package's own schema: walk
+ * raw field numbers on the encoded deny so a wrong oneof (e.g. RecordScreen
+ * failure at #1 instead of #4) fails the test.
+ */
+const UNSUPPORTED_DENY_WIRE: readonly DenyWireExpect[] = [
+  { requestName: "shell_args", kind: "result", resultField: 2, innerOneofField: 4 },
+  { requestName: "diagnostics_args", kind: "result", resultField: 9, innerOneofField: 2 },
+  { requestName: "fetch_args", kind: "result", resultField: 20, innerOneofField: 2 },
+  { requestName: "record_screen_args", kind: "result", resultField: 21, innerOneofField: 4 },
+  { requestName: "computer_use_args", kind: "result", resultField: 22, innerOneofField: 2 },
+  { requestName: "write_shell_stdin_args", kind: "result", resultField: 23, innerOneofField: 2 },
+  { requestName: "execute_hook_args", kind: "throw" },
+  { requestName: "redacted_read_args", kind: "result", resultField: 29, innerOneofField: 2 },
+  {
+    requestName: "force_background_shell_args",
+    kind: "result",
+    resultField: 30,
+    innerOneofField: 1,
+    innerVarint: { field: 1, value: FORCE_BACKGROUND_STATUS_ERROR },
+  },
+  {
+    requestName: "force_background_subagent_args",
+    kind: "result",
+    resultField: 31,
+    innerOneofField: 1,
+    innerVarint: { field: 1, value: FORCE_BACKGROUND_STATUS_ERROR },
+  },
+  { requestName: "subagent_await_args", kind: "result", resultField: 37, innerOneofField: 4 },
+  { requestName: "smart_mode_classifier_args", kind: "result", resultField: 38, innerOneofField: 2 },
+  { requestName: "canvas_diagnostics_args", kind: "result", resultField: 40, innerOneofField: 2 },
+  { requestName: "shell_allowlist_precheck_args", kind: "result", resultField: 41, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
+  { requestName: "mcp_allowlist_precheck_args", kind: "result", resultField: 42, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
+  { requestName: "web_fetch_allowlist_precheck_args", kind: "result", resultField: 43, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
+  { requestName: "git_diff_request", kind: "throw" },
+]
+
+function requireField(bytes: Uint8Array, fn: number, label: string): RawField {
+  const hit = readAllFields(bytes).find((field) => field.fn === fn)
+  expect(hit, `${label} missing field #${fn}`).toBeDefined()
+  return hit!
+}
+
+function requireLengthDelimited(bytes: Uint8Array, fn: number, label: string): Uint8Array {
+  const hit = requireField(bytes, fn, label)
+  expect(hit.wt, `${label} field #${fn} wire type`).toBe(2)
+  expect(hit.bytes, `${label} field #${fn} bytes`).toBeDefined()
+  return hit.bytes!
+}
+
+function isStreamClose(frame: Uint8Array, execId: number): boolean {
+  const control = requireLengthDelimited(frame, 5, "ACM")
+  const close = requireLengthDelimited(control, 1, "ExecClientControlMessage")
+  return requireField(close, 1, "stream_close").varint === execId
+}
+
+describe("unsupported exec deny wire shapes", () => {
+  it("covers every known unsupported variant with a dedicated raw-field fixture", () => {
+    const unsupported = CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "unsupported")
+    expect(unsupported.map((variant) => variant.requestName)).toEqual(
+      UNSUPPORTED_DENY_WIRE.map((entry) => entry.requestName),
+    )
+  })
+
+  it("emits the canonical result oneof field, not a guessed sibling", () => {
+    for (const entry of UNSUPPORTED_DENY_WIRE) {
+      const variant = cursorExecVariantByRequestName(entry.requestName)
+      expect(variant, entry.requestName).toBeDefined()
+      const frames = buildUnsupportedExecDeny({
+        execId: 42,
+        variant: variant!,
+        reason: "not available; use listed tools",
+      })
+      expect(frames.length, entry.requestName).toBe(2)
+      expect(isStreamClose(frames[1]!, 42), `${entry.requestName} stream_close`).toBe(true)
+
+      if (entry.kind === "throw") {
+        const control = requireLengthDelimited(frames[0]!, 5, `${entry.requestName} ACM`)
+        const thrown = requireLengthDelimited(control, 2, `${entry.requestName} throw`)
+        expect(requireField(thrown, 1, `${entry.requestName} throw.id`).varint).toBe(42)
+        const errorBytes = requireLengthDelimited(thrown, 2, `${entry.requestName} throw.error`)
+        expect(new TextDecoder().decode(errorBytes)).toContain("not available")
+        continue
+      }
+
+      const exec = requireLengthDelimited(frames[0]!, 2, `${entry.requestName} ACM`)
+      expect(requireField(exec, 1, `${entry.requestName} id`).varint).toBe(42)
+      const resultBytes = requireLengthDelimited(exec, entry.resultField, `${entry.requestName} result`)
+      const inner = readAllFields(resultBytes).find((field) => field.fn === entry.innerOneofField)
+      expect(inner, `${entry.requestName} inner oneof #${entry.innerOneofField}`).toBeDefined()
+      if (entry.innerVarint) {
+        expect(inner!.wt, `${entry.requestName} inner wire type`).toBe(0)
+        expect(inner!.varint, `${entry.requestName} inner varint`).toBe(entry.innerVarint.value)
+      } else {
+        expect(inner!.wt, `${entry.requestName} inner wire type`).toBe(2)
+      }
+    }
+  })
+
+  it("cites ForceBackgroundStatus error = 2", () => {
+    expect(FORCE_BACKGROUND_STATUS_ERROR).toBe(2)
   })
 })

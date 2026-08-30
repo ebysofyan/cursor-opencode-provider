@@ -158,6 +158,46 @@ describe("opencode2 catalog", () => {
     expect(long!.limit.context).toBe(1_000_000)
   })
 
+  test("Fast entries keep a distinct id but address the same wire model", () => {
+    const { draft, models } = fakeCatalogDraft()
+    applyCursorModels(draft, [
+      {
+        id: "composer-2.5",
+        displayName: "Composer 2.5",
+        supportsAgent: true,
+        variants: [
+          {
+            key: "slow",
+            displayName: "Composer 2.5",
+            parameterValues: [{ id: "fast", value: "false" }],
+            isDefaultNonMax: true,
+            isDefaultMax: false,
+          },
+          {
+            key: "fast",
+            displayName: "Composer 2.5 Fast",
+            parameterValues: [{ id: "fast", value: "true" }],
+            isDefaultNonMax: false,
+            isDefaultMax: true,
+          },
+        ],
+      },
+    ])
+
+    const fast = models.get("cursor/composer-2.5-fast")
+    expect(fast).toBeDefined()
+    expect(fast!.id).toBe("composer-2.5-fast")
+    expect(fast!.modelID).toBe("composer-2.5")
+    expect(fast!.name).toBe("Composer 2.5 Fast")
+    expect(fast!.cost).toEqual([
+      {
+        input: 3,
+        output: 15,
+        cache: { read: 0.5, write: 0 },
+      },
+    ])
+  })
+
   test("variants become an array carrying their parameters in settings", () => {
     const { draft, models } = fakeCatalogDraft()
     applyCursorModels(draft, [

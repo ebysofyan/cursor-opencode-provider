@@ -1,10 +1,13 @@
 # Cursor wire / catalog model ids used for pricing coverage checks.
-# Intentionally unpriced first-party ids (Auto / Composer / Grok) are listed too;
-# checkCursorPricingCoverage treats them as covered.
+# Auto (`default`) is intentionally unpriced; Composer / Grok Fast rows use
+# synthetic `<id>-fast` catalog ids.
 default
 composer-2.5
+composer-2.5-fast
 grok-4.5
+grok-4.5-fast
 grok-4.6
+grok-4.6-fast
 claude-fable-5
 claude-haiku-4-5
 claude-opus-4-5

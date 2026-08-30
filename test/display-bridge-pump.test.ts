@@ -840,10 +840,11 @@ describe("display-only ToolCall pump bridge", () => {
     expect(parts.some((p) => p.type === "tool-call")).toBe(false)
   })
 
-  it("fails promptly for an unknown exec variant instead of guessing a response", async () => {
+  it("soft-denies a known unsupported exec variant and keeps the Run alive", async () => {
     const writes: Uint8Array[] = []
     const parts: any[] = []
-    const session = fakeSession([rawExecPayload(42, 38)], writes)
+    const session = fakeSession([rawExecPayload(42, 38), turnEndedPayload()], writes)
+    session.requestContext.env = { workspace_paths: ["/tmp"] }
     const controller = {
       enqueue(part: unknown) {
         parts.push(part)
@@ -851,17 +852,55 @@ describe("display-only ToolCall pump bridge", () => {
       error() {},
     } as ReadableStreamDefaultController<any>
 
-    await expect(
-      pump(session, controller, { textId: "text", reasoningId: "reasoning" }),
-    ).rejects.toMatchObject({
-      message:
-        "Unsupported Cursor exec variant smart_mode_classifier_args " +
-        "(request field #38, expected result smart_mode_classifier_result field #38, handling=unsupported) (id=42)",
-      code: "CURSOR_RUN_REQUEST_UNSUPPORTED",
-    })
-    expect(writes).toHaveLength(0)
-    expect(parts.some((p) => p.type === "finish")).toBe(false)
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(writes.length).toBeGreaterThanOrEqual(1)
+    const result = decodeMessage<any>("AgentClientMessage", writes[0]!).exec_client_message
+      .smart_mode_classifier_result
+    expect(result.error.error).toContain("Cursor-native 'smart_mode_classifier_args' is not available")
+    expect(result.error.error).toContain("Workspace root:")
+    expect(writes.some((frame) => {
+      try {
+        return !!decodeMessage<any>("AgentClientMessage", frame).exec_client_control_message?.stream_close
+      } catch { return false }
+    })).toBe(true)
     expect(session.closed).toBe(true)
+    expect(parts.some((p) => p.type === "finish" && p.finishReason?.unified === "stop")).toBe(true)
+  })
+
+  it("soft-denies an allowlist precheck with allowlisted:false", async () => {
+    const writes: Uint8Array[] = []
+    const session = fakeSession([rawExecPayload(42, 41), turnEndedPayload()], writes)
+    const controller = {
+      enqueue() {},
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(writes.length).toBeGreaterThanOrEqual(1)
+    const result = decodeMessage<any>("AgentClientMessage", writes[0]!).exec_client_message
+      .shell_allowlist_precheck_result
+    expect(result.allowlisted).toBe(false)
+    expect(session.closed).toBe(true)
+  })
+
+  it("soft-denies git diff with a throw and keeps pumping", async () => {
+    const writes: Uint8Array[] = []
+    const session = fakeSession([rawExecPayload(42, 44), turnEndedPayload()], writes)
+    session.requestContext.env = { workspace_paths: ["/tmp"] }
+    const controller = {
+      enqueue() {},
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(writes.length).toBeGreaterThanOrEqual(2)
+    const thrown = decodeMessage<any>("AgentClientMessage", writes[0]!).exec_client_control_message.throw
+    expect(thrown.error).toContain("Cursor-native 'git_diff_request' is not available")
+    expect(thrown.error).toContain("Workspace root:")
+    expect(decodeMessage<any>("AgentClientMessage", writes[1]!).exec_client_control_message.stream_close.id).toBe(42)
   })
 
   it("distinguishes future protocol drift from a known unsupported exec", async () => {
@@ -913,7 +952,64 @@ describe("display-only ToolCall pump bridge", () => {
       inputTokens: { total: 0, noCache: 0, cacheRead: 0, cacheWrite: 0 },
       outputTokens: { total: 0, text: 0, reasoning: 0 },
     })
+    expect(finish.providerMetadata).toBeUndefined()
     expect(sessionManager.pendingFor(session.sessionId, 34)?.resultField).toBe("subagent_result")
+    sessionManager.resolve(session.sessionId, 34)
+  })
+
+  it("emits checkpoint occupancy on tool-call finish so OpenCode can update mid-turn", async () => {
+    const writes: Uint8Array[] = []
+    const parts: any[] = []
+    const session = fakeSession([rawExecPayload(34, 28, rawSubagentArgs())], writes)
+    session.tokenDetails = { usedTokens: 153_744, maxTokens: 256_000 }
+    session.tokenDetailsFresh = true
+    session.cacheDiagnostics = {
+      conversationId: "display-bridge-conversation",
+      priorTokenDetails: { usedTokens: 123_651, maxTokens: 256_000 },
+      startedWithCheckpoint: true,
+      requestContextReused: true,
+      requestContextHash: "abc",
+      checkpointUpdates: 1,
+      tokenDetailUpdates: 1,
+      pumpPasses: 1,
+      stepStarts: 1,
+      stepCompletes: 0,
+      displayToolCalls: 0,
+      execRequests: 1,
+    }
+    const controller = {
+      enqueue(part: unknown) {
+        parts.push(part)
+      },
+      error(error: Error) {
+        throw error
+      },
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    const finish = parts.find((part) =>
+      part.type === "finish" && part.finishReason?.unified === "tool-calls"
+    )
+    expect(finish.usage.outputTokens.total).toBe(1)
+    expect(finish.usage.inputTokens.total + finish.usage.outputTokens.total).toBe(153_744)
+    expect(finish.usage.inputTokens.cacheRead).toBe(123_651)
+    expect(finish.providerMetadata).toEqual({
+      copilot: { totalNanoAiu: 0 },
+      cursor: {
+        usageVersion: 3,
+        occupancyOnly: true,
+        context: {
+          contextUsageVersion: 2,
+          source: "checkpoint-current-run",
+          stale: false,
+          usedTokens: 153_744,
+          maxTokens: 256_000,
+          remainingTokens: 256_000 - 153_744,
+          usedPercent: 60.1,
+        },
+      },
+    })
     sessionManager.resolve(session.sessionId, 34)
   })
 
@@ -1344,3 +1440,121 @@ describe("display-only ToolCall pump bridge", () => {
     expect(finish!.usage.outputTokens.reasoning).toBe(9)
   })
 })
+
+function textDeltaPayload(text: string): Uint8Array {
+  return encodeMessage("AgentServerMessage", {
+    interaction_update: { text_delta: { text } },
+  })
+}
+
+function iteratorFrom(payloads: Uint8Array[]): AsyncIterator<Frame> {
+  let index = 0
+  return {
+    next: async () =>
+      index < payloads.length
+        ? { done: false, value: { flags: 0, payload: payloads[index++] } }
+        : { done: true, value: undefined },
+  }
+}
+
+describe("progress-only continuation pump", () => {
+  it("reopens once for a progress fragment and still finishes the original turn later", async () => {
+    const writes: Uint8Array[] = []
+    const parts: any[] = []
+    const session = fakeSession(
+      [textDeltaPayload("Checking the workspace"), turnEndedPayload()],
+      writes,
+    )
+    session.resumeCheckpoint = Uint8Array.of(1, 2, 3)
+    let reopenCalls = 0
+    session.reopenWithUserMessage = async () => {
+      reopenCalls++
+      session.frames = iteratorFrom([
+        textDeltaPayload("Checking the workspace"),
+        turnEndedPayload(),
+      ])
+    }
+    const controller = {
+      enqueue(part: unknown) {
+        parts.push(part)
+      },
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(reopenCalls).toBe(1)
+    expect(parts.some((p) => p.type === "finish" && p.finishReason?.unified === "stop")).toBe(true)
+    expect(session.closed).toBe(true)
+  })
+
+  it("does not reopen a complete answer that starts with a progress verb", async () => {
+    const writes: Uint8Array[] = []
+    const session = fakeSession(
+      [textDeltaPayload("Reviewing this PR: LGTM"), turnEndedPayload()],
+      writes,
+    )
+    session.resumeCheckpoint = Uint8Array.of(1)
+    let reopenCalls = 0
+    session.reopenWithUserMessage = async () => {
+      reopenCalls++
+    }
+    const controller = {
+      enqueue() {},
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(reopenCalls).toBe(0)
+  })
+
+  it("does not reopen when allowTools is false", async () => {
+    const writes: Uint8Array[] = []
+    const session = fakeSession(
+      [textDeltaPayload("Checking the workspace"), turnEndedPayload()],
+      writes,
+    )
+    session.allowTools = false
+    session.resumeCheckpoint = Uint8Array.of(1)
+    let reopenCalls = 0
+    session.reopenWithUserMessage = async () => {
+      reopenCalls++
+    }
+    const controller = {
+      enqueue() {},
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(reopenCalls).toBe(0)
+  })
+
+  it("finishes the original turn_ended when continuation reopen fails", async () => {
+    const writes: Uint8Array[] = []
+    const parts: any[] = []
+    const session = fakeSession(
+      [textDeltaPayload("Checking the workspace"), turnEndedPayload()],
+      writes,
+    )
+    session.resumeCheckpoint = Uint8Array.of(1)
+    session.reopenWithUserMessage = async () => {
+      throw new Error("continuation run 401")
+    }
+    const controller = {
+      enqueue(part: unknown) {
+        parts.push(part)
+      },
+      error(err: unknown) {
+        throw err
+      },
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    expect(parts.some((p) => p.type === "finish" && p.finishReason?.unified === "stop")).toBe(true)
+    expect(session.closed).toBe(true)
+  })
+})
+

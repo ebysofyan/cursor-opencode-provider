@@ -5,7 +5,7 @@ import {
   type ModelInfo,
   type ModelVariant,
 } from "./models.js"
-import { applyCursorModelCost } from "./pricing.js"
+import { applyCursorModelCost, hasCursorFastPricing } from "./pricing.js"
 import {
   getDocumentedCursorModelContext,
   resolveCursorModelSupportsImages,
@@ -127,6 +127,10 @@ function isLongContextVariant(v: ModelVariant): boolean {
   )
 }
 
+function isFastVariant(v: ModelVariant): boolean {
+  return v.parameterValues.some((p) => p.id === "fast" && p.value === "true")
+}
+
 function variantsForTier(mi: ModelInfo, tier: "base" | "long"): ModelVariant[] {
   return mi.variants.filter((v) => isLongContextVariant(v) === (tier === "long"))
 }
@@ -155,12 +159,18 @@ export function thinkingSuffixBaseNames(models: ModelInfo[]): Set<string> {
 
 export function modelInfoToConfig(
   mi: ModelInfo,
-  options: { thinkingSuffix?: boolean; contextTier?: "base" | "long" } = {},
+  options: {
+    thinkingSuffix?: boolean
+    contextTier?: "base" | "long"
+    variants?: ModelVariant[]
+    fast?: boolean
+  } = {},
 ) {
   const contextTier = options.contextTier ?? "base"
-  const variants = variantsForTier(mi, contextTier)
+  const variants = options.variants ?? variantsForTier(mi, contextTier)
   let name = baseName(mi)
   if (options.thinkingSuffix) name += " Thinking"
+  if (options.fast) name += " Fast"
   if (contextTier === "long") name += " 1M"
   // OpenCode's context limit is static per model entry, while Cursor's context
   // tier is a variant parameter. Long-context choices are therefore emitted as
@@ -192,8 +202,10 @@ export function modelInfoToConfig(
   }
   const variantConfig = modelInfoVariants(mi, variants)
   if (variantConfig) config.variants = variantConfig
-  if (contextTier === "long") {
-    const defaultVariant = variants.find((v) => v.isDefaultMax) ?? variants[0]
+  if (contextTier === "long" || options.fast) {
+    const defaultVariant = contextTier === "long"
+      ? (variants.find((v) => v.isDefaultMax) ?? variants[0])
+      : (variants.find((v) => v.isDefaultNonMax) ?? variants[0])
     if (defaultVariant) {
       config.options = {
         [CURSOR_WIRE_MODEL_ID_KEY]: mi.id,
@@ -204,40 +216,102 @@ export function modelInfoToConfig(
   return config
 }
 
+type CatalogSpeedGroup = {
+  fast: boolean
+  variants: ModelVariant[]
+}
+
+function speedGroups(variants: ModelVariant[], splitFast: boolean): CatalogSpeedGroup[] {
+  if (!splitFast) return variants.length > 0 ? [{ fast: false, variants }] : []
+  const slow = variants.filter((variant) => !isFastVariant(variant))
+  const fast = variants.filter((variant) => isFastVariant(variant))
+  const groups: CatalogSpeedGroup[] = []
+  if (slow.length > 0) groups.push({ fast: false, variants: slow })
+  if (fast.length > 0) groups.push({ fast: true, variants: fast })
+  return groups
+}
+
+function uniqueCatalogId(usedIds: Set<string>, modelId: string, suffix: string): string {
+  let id = `${modelId}${suffix}`
+  if (!usedIds.has(id)) {
+    usedIds.add(id)
+    return id
+  }
+  let n = 2
+  while (true) {
+    const candidate = suffix === "-fast"
+      ? `${modelId}-fast-${n}`
+      : suffix === "-1m-fast"
+        ? `${modelId}-1m-${n}-fast`
+        : `${modelId}-1m-${n}`
+    if (!usedIds.has(candidate)) {
+      usedIds.add(candidate)
+      return candidate
+    }
+    n++
+  }
+}
+
 export function modelsToConfig(models: ModelInfo[]): Record<string, any> {
   const ambiguous = thinkingSuffixBaseNames(models)
   const out: Record<string, any> = {}
   const usedIds = new Set(models.map((m) => m.id))
   for (const m of models) {
     const thinkingSuffix = !!m.supportsThinking && ambiguous.has(baseName(m))
-    const baseVariants = variantsForTier(m, "base")
-    const longVariants = variantsForTier(m, "long")
-
-    if (baseVariants.length > 0 || longVariants.length === 0) {
+    const splitFast = hasCursorFastPricing(m.id)
+    const groups: Array<{
+      contextTier: "base" | "long"
+      fast: boolean
+      variants: ModelVariant[]
+      suffix: string
+    }> = []
+    for (const contextTier of ["base", "long"] as const) {
+      const suffixFor = (fast: boolean) =>
+        contextTier === "long" ? (fast ? "-1m-fast" : "-1m") : (fast ? "-fast" : "")
+      for (const group of speedGroups(variantsForTier(m, contextTier), splitFast)) {
+        groups.push({
+          contextTier,
+          fast: group.fast,
+          variants: group.variants,
+          suffix: suffixFor(group.fast),
+        })
+      }
+    }
+    if (groups.length === 0) {
       out[m.id] = applyCursorModelCost(
         m.id,
         modelInfoToConfig(m, { thinkingSuffix, contextTier: "base" }),
       )
-    }
-    if (longVariants.length === 0) continue
-
-    if (baseVariants.length === 0) {
-      // No separate base tier — the wire id itself is the long-context entry.
-      out[m.id] = applyCursorModelCost(
-        `${m.id}-1m`,
-        modelInfoToConfig(m, { thinkingSuffix, contextTier: "long" }),
-      )
       continue
     }
 
-    let longId = `${m.id}-1m`
-    let suffix = 2
-    while (usedIds.has(longId)) longId = `${m.id}-1m-${suffix++}`
-    usedIds.add(longId)
-    out[longId] = applyCursorModelCost(
-      longId,
-      modelInfoToConfig(m, { thinkingSuffix, contextTier: "long" }),
-    )
+    const primaryIndex = groups.findIndex((group) => group.suffix === "")
+    const primary = primaryIndex >= 0 ? primaryIndex : 0
+    for (const [index, group] of groups.entries()) {
+      const catalogId = index === primary
+        ? m.id
+        : uniqueCatalogId(usedIds, m.id, group.suffix || "-fast")
+      const pricingId = group.fast ? `${m.id}-fast` : (group.contextTier === "long" ? `${m.id}-1m` : m.id)
+      const config = modelInfoToConfig(m, {
+        thinkingSuffix,
+        contextTier: group.contextTier,
+        variants: group.variants,
+        fast: group.fast,
+      })
+      if (catalogId !== m.id && !config.options) {
+        const defaultVariant =
+          (group.contextTier === "long"
+            ? group.variants.find((v) => v.isDefaultMax)
+            : group.variants.find((v) => v.isDefaultNonMax)) ?? group.variants[0]
+        if (defaultVariant) {
+          config.options = {
+            [CURSOR_WIRE_MODEL_ID_KEY]: m.id,
+            [CURSOR_VARIANT_PARAMETERS_KEY]: defaultVariant.parameterValues.map((p) => ({ ...p })),
+          }
+        }
+      }
+      out[catalogId] = applyCursorModelCost(pricingId, config)
+    }
   }
   return out
 }

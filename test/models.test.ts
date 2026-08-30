@@ -480,6 +480,263 @@ describe("modelsToConfig (context-tier materialization)", () => {
     expect(config["claude-opus-4-8-1m-2"]).not.toHaveProperty("id")
     expect(config["claude-opus-4-8-1m-2"].options[CURSOR_WIRE_MODEL_ID_KEY]).toBe("claude-opus-4-8")
   })
+
+  it("splits Composer Fast into a synthetic catalog id with the same wire model", () => {
+    const composer: Parameters<typeof modelsToConfig>[0][number] = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      variants: [
+        {
+          key: "composer-2.5",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: true,
+          isDefaultMax: false,
+          parameterValues: [{ id: "fast", value: "false" }],
+        },
+        {
+          key: "composer-2.5",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: false,
+          isDefaultMax: true,
+          parameterValues: [{ id: "fast", value: "true" }],
+        },
+      ],
+    }
+
+    const config = modelsToConfig([composer])
+    expect(Object.keys(config)).toEqual(["composer-2.5", "composer-2.5-fast"])
+    expect(config["composer-2.5"].name).toBe("Composer 2.5")
+    expect(config["composer-2.5-fast"]).toMatchObject({
+      name: "Composer 2.5 Fast",
+      options: {
+        [CURSOR_WIRE_MODEL_ID_KEY]: "composer-2.5",
+        [CURSOR_VARIANT_PARAMETERS_KEY]: [{ id: "fast", value: "true" }],
+      },
+    })
+    expect(config["composer-2.5"].cost).toEqual({
+      input: 0.5,
+      output: 2.5,
+      cache_read: 0.2,
+    })
+    expect(config["composer-2.5-fast"].cost).toEqual({
+      input: 3,
+      output: 15,
+      cache_read: 0.5,
+    })
+    expect(Object.keys(config["composer-2.5"].variants)).toEqual(["Composer 2.5 default"])
+    expect(Object.keys(config["composer-2.5-fast"].variants)).toEqual(["Composer 2.5 Fast"])
+  })
+
+  it("keeps a Fast-only Composer catalog id on the wire model id", () => {
+    const composer: Parameters<typeof modelsToConfig>[0][number] = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      variants: [
+        {
+          key: "composer-2.5",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: true,
+          isDefaultMax: true,
+          parameterValues: [{ id: "fast", value: "true" }],
+        },
+      ],
+    }
+
+    const config = modelsToConfig([composer])
+    expect(Object.keys(config)).toEqual(["composer-2.5"])
+    expect(config["composer-2.5"].name).toBe("Composer 2.5 Fast")
+    expect(config["composer-2.5"].cost).toEqual({
+      input: 3,
+      output: 15,
+      cache_read: 0.5,
+    })
+    expect(config["composer-2.5"].options[CURSOR_WIRE_MODEL_ID_KEY]).toBe("composer-2.5")
+  })
+
+  it("does not split Claude Fast variants when Cursor publishes one price", () => {
+    const opus = {
+      ...model,
+      variants: [
+        ...model.variants,
+        {
+          key: "claude-opus-4-8",
+          displayName: "Opus 4.8 Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "context", value: "300k" },
+            { id: "fast", value: "true" },
+          ],
+        },
+      ],
+    }
+
+    const config = modelsToConfig([opus])
+    expect(Object.keys(config)).toEqual(["claude-opus-4-8", "claude-opus-4-8-1m"])
+    expect(Object.keys(config["claude-opus-4-8"].variants)).toEqual([
+      "Opus 4.8 High",
+      "Opus 4.8 Fast",
+    ])
+  })
+
+  it("combines Fast and 1M into a -1m-fast catalog id", () => {
+    const composer: Parameters<typeof modelsToConfig>[0][number] = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      maxContext: 200_000,
+      maxContextForMaxMode: 1_000_000,
+      variants: [
+        {
+          key: "slow",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: true,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "false" },
+            { id: "context", value: "200k" },
+          ],
+        },
+        {
+          key: "fast",
+          displayName: "Composer 2.5 Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "true" },
+            { id: "context", value: "200k" },
+          ],
+        },
+        {
+          key: "long",
+          displayName: "Composer 2.5 1M",
+          isDefaultNonMax: false,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "false" },
+            { id: "context", value: "1m" },
+          ],
+        },
+        {
+          key: "long-fast",
+          displayName: "Composer 2.5 1M Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: true,
+          parameterValues: [
+            { id: "fast", value: "true" },
+            { id: "context", value: "1m" },
+          ],
+        },
+      ],
+    }
+
+    const config = modelsToConfig([composer])
+    expect(Object.keys(config)).toEqual([
+      "composer-2.5",
+      "composer-2.5-fast",
+      "composer-2.5-1m",
+      "composer-2.5-1m-fast",
+    ])
+    expect(config["composer-2.5-1m-fast"]).toMatchObject({
+      name: "Composer 2.5 Fast 1M",
+      limit: { context: 1_000_000, output: 128_000 },
+      options: {
+        [CURSOR_WIRE_MODEL_ID_KEY]: "composer-2.5",
+        [CURSOR_VARIANT_PARAMETERS_KEY]: [
+          { id: "fast", value: "true" },
+          { id: "context", value: "1m" },
+        ],
+      },
+    })
+    expect(config["composer-2.5-1m-fast"].cost).toEqual(config["composer-2.5-fast"].cost)
+  })
+
+  it("avoids collisions with a real model id ending in -1m-fast", () => {
+    const composer: Parameters<typeof modelsToConfig>[0][number] = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      maxContext: 200_000,
+      maxContextForMaxMode: 1_000_000,
+      variants: [
+        {
+          key: "slow",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: true,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "false" },
+            { id: "context", value: "200k" },
+          ],
+        },
+        {
+          key: "fast",
+          displayName: "Composer 2.5 Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "true" },
+            { id: "context", value: "200k" },
+          ],
+        },
+        {
+          key: "long",
+          displayName: "Composer 2.5 1M",
+          isDefaultNonMax: false,
+          isDefaultMax: false,
+          parameterValues: [
+            { id: "fast", value: "false" },
+            { id: "context", value: "1m" },
+          ],
+        },
+        {
+          key: "long-fast",
+          displayName: "Composer 2.5 1M Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: true,
+          parameterValues: [
+            { id: "fast", value: "true" },
+            { id: "context", value: "1m" },
+          ],
+        },
+      ],
+    }
+    const config = modelsToConfig([
+      composer,
+      { id: "composer-2.5-1m-fast", displayName: "Real 1M Fast model", variants: [] },
+    ])
+    expect(Object.keys(config)).toContain("composer-2.5-1m-2-fast")
+    expect(config["composer-2.5-1m-2-fast"].options[CURSOR_WIRE_MODEL_ID_KEY]).toBe("composer-2.5")
+    expect(config["composer-2.5-1m-fast"].name).toBe("Real 1M Fast model")
+  })
+
+  it("avoids collisions with a real model id ending in -fast", () => {
+    const composer: Parameters<typeof modelsToConfig>[0][number] = {
+      id: "composer-2.5",
+      displayName: "Composer 2.5",
+      variants: [
+        {
+          key: "slow",
+          displayName: "Composer 2.5",
+          isDefaultNonMax: true,
+          isDefaultMax: false,
+          parameterValues: [{ id: "fast", value: "false" }],
+        },
+        {
+          key: "fast",
+          displayName: "Composer 2.5 Fast",
+          isDefaultNonMax: false,
+          isDefaultMax: true,
+          parameterValues: [{ id: "fast", value: "true" }],
+        },
+      ],
+    }
+    const config = modelsToConfig([
+      composer,
+      { id: "composer-2.5-fast", displayName: "Real Fast model", variants: [] },
+    ])
+    expect(Object.keys(config)).toContain("composer-2.5-fast-2")
+    expect(config["composer-2.5-fast-2"].options[CURSOR_WIRE_MODEL_ID_KEY]).toBe("composer-2.5")
+    expect(config["composer-2.5-fast"].name).toBe("Real Fast model")
+  })
 })
 
 describe("isCacheFresh", () => {

@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 /**
  * Check that known Cursor model ids resolve to pricing (or are intentionally unpriced).
+ * Synthetic Fast catalog ids (`<id>-fast`) are first-class keys; Auto (`default`)
+ * is the only remaining unpriced first-party id.
  *
  *   bun run check:pricing
  *   bun run check:pricing -- --models-file test/fixtures/cursor-pricing-models.txt

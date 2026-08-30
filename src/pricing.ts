@@ -1,7 +1,7 @@
 /**
  * Cursor model token pricing for OpenCode cost reporting.
  *
- * Rates come from Cursor's public docs (Other Models pool = provider API price).
+ * Rates come from Cursor's public docs (Cursor Models + Other Models tables).
  * Generated data lives in `pricing-data.ts`; regenerate with
  * `bun run generate:pricing`. Unknown / unpublished models get no `cost`.
  */
@@ -32,9 +32,9 @@ export type CursorPricingCoverage = {
 
 /**
  * Models we expose that Cursor does not currently publish numeric rates for
- * on the Other Models table (Auto / first-party Cursor Models pool).
+ * (Auto is billed at the routed model's list price).
  */
-export const CURSOR_UNPRICED_MODEL_IDS = ["default", "composer-2.5", "grok-4.5", "grok-4.6"] as const
+export const CURSOR_UNPRICED_MODEL_IDS = ["default"] as const
 
 const UNPRICED = new Set<string>(CURSOR_UNPRICED_MODEL_IDS)
 
@@ -81,14 +81,24 @@ export function isOpenCodeModelCost(value: unknown): value is OpenCodeModelCost 
   return validateOpenCodeModelCost(value).valid
 }
 
-/** Strip synthetic OpenCode long-context suffix (`…-1m`, `…-1m-2`, …). */
+/** Strip synthetic OpenCode suffixes (`…-1m`, `…-1m-2`, `…-1m-fast`, …). */
 export function wireModelIdForPricing(modelId: string): {
   baseId: string
   longContextEntry: boolean
 } {
-  const match = /^(.*)-1m(?:-(\d+))?$/.exec(modelId)
-  if (!match) return { baseId: modelId, longContextEntry: false }
-  return { baseId: match[1]!, longContextEntry: true }
+  const match = /^(.*)-1m(?:-\d+)?(-fast)?$/.exec(modelId)
+  if (match) {
+    return { baseId: `${match[1]!}${match[2] ?? ""}`, longContextEntry: true }
+  }
+  return { baseId: modelId, longContextEntry: false }
+}
+
+/**
+ * True when Cursor publishes a distinct Fast rate for this wire model id.
+ * Catalog code uses this to split Fast variants into a `-fast` entry.
+ */
+export function hasCursorFastPricing(modelId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(CURSOR_MODEL_COSTS, `${modelId}-fast`)
 }
 
 function asMutableCost(value: OpenCodeModelCost): OpenCodeModelCost {
@@ -104,6 +114,7 @@ function asMutableCost(value: OpenCodeModelCost): OpenCodeModelCost {
 /**
  * Look up classic OpenCode cost for a catalog / wire model id.
  * Synthetic `-1m` entries retain both base and documented long-context rates.
+ * Synthetic `-fast` entries are stored as their own keys.
  */
 export function getCursorModelCost(modelId: string): OpenCodeModelCost | undefined {
   const { baseId } = wireModelIdForPricing(modelId)

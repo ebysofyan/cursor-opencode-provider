@@ -6,8 +6,9 @@
  * Sources of truth:
  *   - pricing: https://cursor.com/docs/models-and-pricing.md
  *   - context: https://cursor.com/docs.md
- * First-party Cursor models (Auto / Composer / Grok) are omitted when the page
- * does not publish numeric rates — fill those via CURSOR_PRICING_OVERRIDES.
+ * Cursor Models (Composer / Grok) and Other Models tables are both imported.
+ * Fast rows become synthetic `<id>-fast` catalog ids (same pattern as `-1m`).
+ * Auto is omitted when the page does not publish numeric rates.
  *
  * Usage:
  *   bun run generate:pricing
@@ -107,11 +108,11 @@ const SKIP_DISPLAY_NAMES = new Set([
 ])
 
 /**
- * Manual rates for models Cursor does not publish in the Other Models table.
+ * Manual rates for models Cursor does not publish in any pricing table.
  * Leave empty until the docs publish numbers (or a maintainer verifies rates).
  */
 const CURSOR_PRICING_OVERRIDES: Record<string, OpenCodeModelCost> = {
-  // default (Auto), composer-2.5, grok-4.5, grok-4.6 — no numeric rates on the markdown page.
+  // default (Auto) — billed at the routed model's list price, no Auto-specific row.
 }
 
 type ParsedRow = {
@@ -258,19 +259,41 @@ function notesImplyInput2xLongContext(notes: string): boolean {
   )
 }
 
-function parsePricingTable(markdown: string): ParsedRow[] {
+function isPricingTableHeader(cells: string[]): boolean {
+  const header = cells.map((cell) => cell.toLowerCase())
+  return (
+    header[0] === "model" &&
+    header[1] === "provider" &&
+    header[2] === "input" &&
+    !!header[3]?.includes("cache write") &&
+    !!header[4]?.includes("cache read") &&
+    header[5] === "output"
+  )
+}
+
+/**
+ * Map a docs display name onto a catalog / pricing id.
+ * `Model (Fast)` rows become synthetic `<id>-fast` entries, matching the `-1m`
+ * long-context split. Unmapped names return undefined so the caller can throw.
+ */
+export function catalogIdForPricingDisplayName(displayName: string): string | undefined {
+  const direct = DISPLAY_NAME_TO_MODEL_ID[displayName]
+  if (direct) return direct
+  const fast = /^(.*) \(Fast\)$/.exec(displayName)
+  if (!fast) return undefined
+  const baseId = DISPLAY_NAME_TO_MODEL_ID[fast[1]!]
+  return baseId ? `${baseId}-fast` : undefined
+}
+
+function parsePricingTables(markdown: string): ParsedRow[] {
   const rows: ParsedRow[] = []
   let inTable = false
-  let sawHeader = false
 
   for (const line of markdown.split(/\r?\n/)) {
-    if (/^###\s+Model pricing\b/i.test(line)) {
-      inTable = true
-      sawHeader = false
+    if (!line.startsWith("|")) {
+      inTable = false
       continue
     }
-    if (inTable && /^##\s+/.test(line)) break
-    if (!inTable || !line.startsWith("|")) continue
 
     const cells = line
       .trim()
@@ -278,29 +301,17 @@ function parsePricingTable(markdown: string): ParsedRow[] {
       .replace(/\|$/, "")
       .split("|")
       .map((cell) => cell.trim())
-    if (cells.length < 6) {
-      throw new Error(`Pricing table row has fewer than 6 cells: ${line}`)
-    }
 
-    if (!sawHeader) {
-      const header = cells.map((c) => c.toLowerCase())
-      if (
-        header[0] !== "model" ||
-        header[1] !== "provider" ||
-        header[2] !== "input" ||
-        !header[3]?.includes("cache write") ||
-        !header[4]?.includes("cache read") ||
-        header[5] !== "output"
-      ) {
-        throw new Error(
-          `Unexpected pricing table header: ${cells.join(" | ")}. ` +
-            `Update scripts/generate-cursor-pricing.ts for the new schema.`,
-        )
+    if (!inTable) {
+      if (cells.length >= 6 && isPricingTableHeader(cells)) {
+        inTable = true
       }
-      sawHeader = true
       continue
     }
 
+    if (cells.length < 6) {
+      throw new Error(`Pricing table row has fewer than 6 cells: ${line}`)
+    }
     if (cells.every((cell) => /^[-:\s]+$/.test(cell))) continue
 
     const displayName = stripMarkdownLink(cells[0]!)
@@ -323,8 +334,8 @@ function parsePricingTable(markdown: string): ParsedRow[] {
     })
   }
 
-  if (!sawHeader || rows.length === 0) {
-    throw new Error("Could not find the Model pricing table in Cursor docs markdown")
+  if (rows.length === 0) {
+    throw new Error("Could not find a Model pricing table in Cursor docs markdown")
   }
   return rows
 }
@@ -333,11 +344,11 @@ export function buildPricingTable(markdown: string): Record<string, OpenCodeMode
   const table: Record<string, OpenCodeModelCost> = { ...CURSOR_PRICING_OVERRIDES }
   const longContextById = new Map<string, OpenCodeModelCost>()
 
-  for (const row of parsePricingTable(markdown)) {
+  for (const row of parsePricingTables(markdown)) {
     if (SKIP_DISPLAY_NAMES.has(row.displayName)) continue
     if (/\(fast mode\)/i.test(row.displayName)) continue
 
-    const modelId = DISPLAY_NAME_TO_MODEL_ID[row.displayName]
+    const modelId = catalogIdForPricingDisplayName(row.displayName)
     if (!modelId) {
       throw new Error(
         `Unmapped pricing display name ${JSON.stringify(row.displayName)}. ` +

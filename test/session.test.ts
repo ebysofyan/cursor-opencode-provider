@@ -1,5 +1,7 @@
 import { describe, it, expect } from "bun:test"
 import { SessionManager, type CursorSession } from "../src/session.js"
+import { CursorProtocolError } from "../src/errors.js"
+import type { BidiStream, BidiTerminalEvent } from "../src/transport/connect.js"
 
 let _seq = 0
 function fakeSession(): CursorSession {
@@ -377,5 +379,75 @@ describe("SessionManager", () => {
       reason: "open-session-cap-exceeded",
     })
     expect(c.closed).toBe(false)
+  })
+
+  it("replaceStream swaps frames, destroys the old stream, and keeps the pump owner", () => {
+    const mgr = new SessionManager()
+    const s = fakeSession()
+    let oldDestroyed = false
+    let unsubscribed = false
+    s.stream.destroy = () => { oldDestroyed = true }
+    s.stream.onTerminal = () => () => { unsubscribed = true }
+    mgr.registerSession(s)
+    const owner = Symbol("pump")
+    mgr.beginPump(s, owner)
+    s.deferredTerminalReason = "remote-clean-close"
+
+    const nextFrames = { next: async () => ({ done: true as const, value: undefined }) }
+    const next: BidiStream = {
+      write() { return true },
+      end() {},
+      destroy() {},
+      isClosed: () => false,
+      frames: () => ({ [Symbol.asyncIterator]: () => nextFrames }),
+      onTerminal() { return () => {} },
+    }
+    mgr.replaceStream(s, next)
+
+    expect(oldDestroyed).toBe(true)
+    expect(unsubscribed).toBe(true)
+    expect(s.stream).toBe(next)
+    expect(s.frames).toBe(nextFrames)
+    expect(s.deferredTerminalReason).toBe(null)
+    expect(mgr.isPumpOwner(s, owner)).toBe(true)
+    expect(s.closed).toBe(false)
+    expect(mgr.endPump(s, owner)).toBe(true)
+    expect(s.closed).toBe(false)
+  })
+
+  it("replaceStream ignores the old stream's later terminal event", () => {
+    const mgr = new SessionManager()
+    const s = fakeSession()
+    let oldListener: ((event: BidiTerminalEvent) => void) | undefined
+    s.stream.onTerminal = (listener) => {
+      oldListener = listener
+      return () => { oldListener = undefined }
+    }
+    mgr.registerSession(s)
+    const owner = Symbol("pump")
+    mgr.beginPump(s, owner)
+    const captured = oldListener
+
+    const next: BidiStream = {
+      write() { return true },
+      end() {},
+      destroy() {},
+      isClosed: () => false,
+      frames: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true as const, value: undefined }) }) }),
+      onTerminal() { return () => {} },
+    }
+    mgr.replaceStream(s, next)
+    captured?.({ kind: "remote-error", error: new CursorProtocolError("old run eof") })
+    expect(s.closed).toBe(false)
+    expect(s.deferredTerminalReason).toBe(null)
+    expect(mgr.isPumpOwner(s, owner)).toBe(true)
+  })
+
+  it("replaceStream throws on a closed session", () => {
+    const mgr = new SessionManager()
+    const s = fakeSession()
+    mgr.registerSession(s)
+    mgr.close(s, "ordinary-cleanup")
+    expect(() => mgr.replaceStream(s, s.stream)).toThrow(/closed Cursor session/)
   })
 })

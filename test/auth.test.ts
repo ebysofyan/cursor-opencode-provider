@@ -257,6 +257,33 @@ describe("resolveBearerToken", () => {
     expect(isExpiringSoon(second)).toBe(false)
   })
 
+  it("coalesces concurrent apiKey exchanges for the same key", async () => {
+    clearBearerTokenCache()
+    let exchanges = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    using server = Bun.serve({
+      port: 0,
+      async fetch() {
+        exchanges++
+        await gate
+        return Response.json({
+          accessToken: makeJwt(3600),
+          refreshToken: "refresh.jwt",
+        })
+      },
+    })
+    const base = `http://localhost:${server.port}`
+    const first = resolveBearerToken({ apiKey: "crsr_inflight-test", baseUrl: base })
+    const second = resolveBearerToken({ apiKey: "crsr_inflight-test", baseUrl: base })
+    release()
+    const [a, b] = await Promise.all([first, second])
+    expect(a).toBe(b)
+    expect(exchanges).toBe(1)
+  })
+
   it("uses a non-`crsr_` apiKey as-is without exchanging it", async () => {
     clearBearerTokenCache()
     let exchanges = 0

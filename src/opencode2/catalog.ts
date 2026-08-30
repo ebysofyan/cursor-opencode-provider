@@ -52,9 +52,10 @@ export function applyCursorProvider(draft: CatalogDraft): void {
 /** Translate one `modelsToConfig` entry into the 2.0 `Model.Info` shape. */
 function applyModelEntry(draft: CatalogDraft, id: string, entry: Record<string, any>): void {
   const options = entry.options as Record<string, unknown> | undefined
-  // Long-context entries get a synthetic OpenCode id (`<id>-1m`) while still
-  // addressing the same Cursor model on the wire. V1 smuggled that through
-  // provider options; 2.0 has a first-class `modelID` for exactly this.
+  // Long-context and Fast entries get synthetic OpenCode ids (`<id>-1m`,
+  // `<id>-fast`, `<id>-1m-fast`) while still addressing the same Cursor model
+  // on the wire. V1 smuggled that through provider options; 2.0 has a
+  // first-class `modelID` for exactly this.
   const wireId =
     typeof options?.[CURSOR_WIRE_MODEL_ID_KEY] === "string"
       ? (options[CURSOR_WIRE_MODEL_ID_KEY] as string)

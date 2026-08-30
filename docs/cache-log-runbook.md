@@ -148,6 +148,9 @@ Important fields:
 |---|---|
 | `source=checkpoint-current-run` | Current Run supplied fresh `tokenDetails`; preferred. |
 | `source=checkpoint-previous-turn` | No fresh details arrived, so the last snapshot is retained and marked stale in provider metadata. |
+| `source=occupancy-checkpoint-current-run` | Tool-call finish published the current Run's occupancy snapshot (display-only, `$0`). |
+| `source=occupancy-checkpoint-previous-turn` | Tool-call finish published the prior checkpoint occupancy because this Run has not yet received token details. |
+| `source=intermediate-zero` | Tool-call finish with no known checkpoint occupancy. Standard usage remains zero. |
 | `source=unavailable` | No checkpoint has ever supplied token details. Standard usage remains zero rather than pretending aggregate TurnEnded usage is context occupancy. |
 | `cursor=used/max(percent)` | Cursor's authoritative context occupancy. |
 | `rawTotal` | Aggregate `TurnEnded` input + output. This is request work, not necessarily current context occupancy. |
@@ -157,8 +160,9 @@ Important fields:
 | `breakdownMatch` | Whether Cursor's category totals agree with `usedTokens`. |
 
 `finish:` is a compact duplicate of the final AI SDK and raw counters. Tool-call
-boundaries should show `source=intermediate-zero`; the final `TurnEnded` should
-settle the complete Run exactly once.
+boundaries should show `source=occupancy-checkpoint-*` when a snapshot exists
+(or `intermediate-zero` with no snapshot); the final `TurnEnded` should settle
+the billed occupancy exactly once.
 
 ### 4. Interpret the cache diagnosis
 

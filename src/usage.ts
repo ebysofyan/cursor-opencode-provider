@@ -315,6 +315,39 @@ export function emptyLanguageModelV3Usage(): LanguageModelV3Usage {
   })
 }
 
+/**
+ * OpenCode TUI/GUI replace each assistant message's `tokens` (they do not sum
+ * occupancy). The TUI footer picks the last assistant with `tokens.output > 0`.
+ * Session cost, however, adds every step-finish. Checkpoint occupancy is
+ * therefore sent as a snapshot with `output=1` so the footer accepts it, and
+ * callers attach {@link OPENCODE_DISPLAY_ONLY_COST_METADATA} so getUsage
+ * reports $0 instead of billing the snapshot as a new prompt.
+ */
+export const OPENCODE_DISPLAY_ONLY_COST_METADATA = {
+  copilot: { totalNanoAiu: 0 },
+} as const
+
+export function occupancyUsageFromTokenDetails(
+  details: CursorConversationTokenDetails,
+  prior?: CursorConversationTokenDetails,
+): LanguageModelV3Usage {
+  const used = Math.max(0, Math.trunc(details.usedTokens))
+  if (used <= 0) return emptyLanguageModelV3Usage()
+  return buildLanguageModelV3UsageFromCounters(
+    {
+      inputTokens: used,
+      outputTokens: 1,
+      cacheRead: prior?.usedTokens ?? 0,
+      cacheWrite: 0,
+      reasoningTokens: 0,
+    },
+    {
+      contextTotalTokens: used,
+      priorContextTokens: prior?.usedTokens,
+    },
+  )
+}
+
 /** Project nested V3 usage into the common flat AI-SDK counter shape. */
 export function flatUsageFromV3(usage: LanguageModelV3Usage): {
   inputTokens: number

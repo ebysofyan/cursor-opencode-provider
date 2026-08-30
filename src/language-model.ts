@@ -18,6 +18,7 @@ import {
   buildToolCallPart,
   buildExecClientMessages,
   buildReadRejectionMessages,
+  buildUnsupportedExecDeny,
   classifyMissingReadTarget,
   isUriReadTarget,
   resolveReadTargetPath,
@@ -43,7 +44,12 @@ import {
   type OpencodeToolDef,
   type ParsedExecRequest,
 } from "./protocol/tools.js"
-import { describeCursorExecVariant } from "./protocol/exec-variants.js"
+import { cursorExecVariantByRequestField, describeCursorExecVariant } from "./protocol/exec-variants.js"
+import { appendWorkspaceRootGrounding } from "./protocol/workspace-grounding.js"
+import {
+  progressOnlyContinuationPrompt,
+  shouldContinueProgressOnlyTurn,
+} from "./protocol/progress-continuation.js"
 import {
   advertisedToolNamesFromDescriptors,
   extractExecDisplayCallId,
@@ -171,6 +177,8 @@ import {
   formatCursorCacheDiagnostics,
   formatCursorTokenCategories,
   formatTurnUsageValidation,
+  occupancyUsageFromTokenDetails,
+  OPENCODE_DISPLAY_ONLY_COST_METADATA,
   turnEndedCounter,
 } from "./usage.js"
 
@@ -777,6 +785,67 @@ export type CursorRunRecovery =
   | { kind: "rebase" }
   | { kind: "resume"; conversationId: string; checkpoint: Uint8Array }
 
+const heartbeatWritePendingBySession = new WeakMap<CursorSession, boolean>()
+const heartbeatGenerationBySession = new WeakMap<CursorSession, number>()
+
+function bumpHeartbeatGeneration(session: CursorSession): number {
+  const generation = (heartbeatGenerationBySession.get(session) ?? 0) + 1
+  heartbeatGenerationBySession.set(session, generation)
+  heartbeatWritePendingBySession.set(session, false)
+  return generation
+}
+
+function isCurrentHeartbeatGeneration(session: CursorSession, generation: number): boolean {
+  return heartbeatGenerationBySession.get(session) === generation
+}
+
+/** Start (or replace) the per-session heartbeat. In-flight writes from a prior attach are ignored. */
+export function attachSessionHeartbeat(session: CursorSession): void {
+  session.heartbeatCancel?.()
+  if (session.heartbeat) {
+    clearInterval(session.heartbeat)
+    session.heartbeat = null
+  }
+  const generation = bumpHeartbeatGeneration(session)
+  const interval = setInterval(() => {
+    if (session.closed || !isCurrentHeartbeatGeneration(session, generation)) return
+    if (heartbeatWritePendingBySession.get(session)) {
+      trace(`heartbeat skipped: prior heartbeat write is still pending sessionId=${session.sessionId}`)
+      return
+    }
+    heartbeatWritePendingBySession.set(session, true)
+    const stream = session.stream
+    void writeWithBackpressure(stream, buildHeartbeat(), "heartbeat")
+      .then(() => {
+        if (!isCurrentHeartbeatGeneration(session, generation) || session.closed) return
+        sessionManager.recordHeartbeatWrite(session)
+      })
+      .catch((cause) => {
+        if (!isCurrentHeartbeatGeneration(session, generation) || session.closed) return
+        sessionManager.close(
+          session,
+          "heartbeat-write-failed",
+          toCursorProviderError(cause, {
+            replaySafe: false,
+            fallback: "Cursor heartbeat write failed",
+          }),
+        )
+      })
+      .finally(() => {
+        if (isCurrentHeartbeatGeneration(session, generation)) {
+          heartbeatWritePendingBySession.set(session, false)
+        }
+      })
+  }, session.policy.heartbeatMs)
+  interval.unref?.()
+  session.heartbeat = interval
+  session.heartbeatCancel = () => {
+    if (session.heartbeat) clearInterval(session.heartbeat)
+    session.heartbeat = null
+    if (isCurrentHeartbeatGeneration(session, generation)) bumpHeartbeatGeneration(session)
+  }
+}
+
 async function startSession(
   modelId: string,
   token: string,
@@ -1173,34 +1242,56 @@ async function startSession(
     closed: false,
   }
   sessionManager.registerSession(session)
-  let heartbeatWritePending = false
-  session.heartbeat = setInterval(() => {
-    if (session.closed) return
-    if (heartbeatWritePending) {
-      // The pending write has its own bounded drain wait and will close the
-      // session with the actual failing operation. Do not race it with another
-      // heartbeat or misattribute an existing KV backlog to the heartbeat.
-      trace(`heartbeat skipped: prior heartbeat write is still pending sessionId=${session.sessionId}`)
-      return
+
+  attachSessionHeartbeat(session)
+
+  const abortIfNeeded = (stream?: BidiStream): void => {
+    if (!session.closed && !callOptions.abortSignal?.aborted) return
+    try { stream?.destroy() } catch { /* already closed */ }
+    if (callOptions.abortSignal?.aborted) {
+      throw new CursorLocalCancellationError("Cursor progress-only continuation cancelled")
     }
-    heartbeatWritePending = true
-    void writeWithBackpressure(stream, buildHeartbeat(), "heartbeat")
-      .then(() => sessionManager.recordHeartbeatWrite(session))
-      .catch((cause) => {
-        sessionManager.close(
-          session,
-          "heartbeat-write-failed",
-          toCursorProviderError(cause, {
-            replaySafe: false,
-            fallback: "Cursor heartbeat write failed",
-          }),
-        )
-      })
-      .finally(() => { heartbeatWritePending = false })
-  }, continuationPolicy.heartbeatMs)
-  session.heartbeat.unref?.()
-  session.heartbeatCancel = () => {
-    if (session.heartbeat) clearInterval(session.heartbeat)
+    throw new CursorProtocolError("Cannot reopen a closed Cursor session")
+  }
+
+  session.reopenWithUserMessage = async (text: string) => {
+    abortIfNeeded()
+    const { resolveBearerToken } = await import("./auth.js")
+    const freshToken = await resolveBearerToken({
+      accessToken: options.accessToken,
+      apiKey: options.apiKey,
+      baseUrl: resolveApiBaseURL(options),
+    })
+    abortIfNeeded()
+    // Do not pass OpenCode's abortSignal into the h2 stream: a tool-calls abort
+    // must not tear down a Run we still need to pump. Check abort around open.
+    const next = await bidiRunStream(freshToken, { baseURL: agentBaseUrl, headers: options.headers })
+    abortIfNeeded(next)
+    const conversationState = session.resumeCheckpoint ?? getCheckpoint(session.conversationId)
+    const reqBytes = buildRunRequest({
+      text,
+      modelId: cursorModelId,
+      conversationId: session.conversationId,
+      conversationGroupId: session.cacheDiagnostics?.conversationGroupId ?? session.conversationId,
+      conversationState,
+      parameterValues,
+      maxMode,
+      toolDescriptors: session.toolDescriptors,
+      requestContext: session.requestContext,
+      action: "user",
+    })
+    try {
+      await writeWithBackpressure(next, reqBytes, "progress-only continuation Run")
+    } catch (error) {
+      try { next.destroy() } catch {}
+      throw error
+    }
+    abortIfNeeded(next)
+    session.heartbeatCancel?.()
+    await waitForStreamWrites(session.stream)
+    abortIfNeeded(next)
+    sessionManager.replaceStream(session, next)
+    attachSessionHeartbeat(session)
   }
 
   callOptions.abortSignal?.addEventListener("abort", () => {
@@ -1619,6 +1710,11 @@ function isTruthyEnv(value: string | undefined): boolean {
 
 const streamWriteChains = new WeakMap<BidiStream, Promise<void>>()
 
+async function waitForStreamWrites(stream: BidiStream): Promise<void> {
+  const pending = streamWriteChains.get(stream)
+  if (pending) await pending.catch(() => undefined)
+}
+
 /**
  * Keep awaited protocol writes ordered per Run stream. In particular, a large
  * KV get_blob reply must drain before another KV reply or heartbeat is queued;
@@ -1755,6 +1851,9 @@ export async function pump(
   )
   let textStarted = false
   let reasoningStarted = false
+  let assistantText = ""
+  let progressContinuationAttempts = 0
+  let emittedHostTools = 0
   const replaySafety = new AttemptReplaySafety(session.sessionId)
   const failRunProtocol = (message: string, code: string): never => {
     replaySafety.markBarrier("unknown-or-malformed-frame")
@@ -1764,6 +1863,26 @@ export async function pump(
   }
   const rethrowTransportWriteFailure = (error: unknown): void => {
     if (error instanceof CursorProviderError && error.origin !== "protocol") throw error
+  }
+  const writeExecFrames = async (
+    frames: Uint8Array[],
+    operation: string,
+  ): Promise<boolean> => {
+    try {
+      for (const frame of frames) {
+        await writeWithBackpressure(session.stream, frame, operation)
+      }
+      return true
+    } catch (error) {
+      rethrowTransportWriteFailure(error)
+      const wrapped = new Error(
+        `Failed to ${operation}: ${(error as Error).message}`,
+      )
+      trace(`exec: reply FAILED ${wrapped.message}`)
+      safeError(wrapped)
+      sessionManager.close(session)
+      return false
+    }
   }
   // OpenCode cancels the ReadableStream between turns (see the cancel handler
   // in doStreamImpl). The frames iterator can still yield a final `done` after
@@ -1792,30 +1911,29 @@ export async function pump(
   }
 
   /** Reply on Cursor's correlated exec channel without exposing a host tool call. */
-  const rejectExec = (parsed: ParsedExecRequest, reason: string, label: string): boolean => {
-    try {
-      for (const frame of buildExecClientMessages({
+  const rejectExec = async (
+    parsed: ParsedExecRequest,
+    reason: string,
+    label: string,
+  ): Promise<boolean> => {
+    const groundedReason = appendWorkspaceRootGrounding(
+      reason,
+      workspaceRootFromRequestContext(session.requestContext),
+    )
+    const ok = await writeExecFrames(
+      buildExecClientMessages({
         execId: parsed.id,
         resultField: parsed.resultField,
         output: "",
-        error: reason,
+        error: groundedReason,
         toolName: parsed.toolName,
         resultMetadata: parsed.resultMetadata,
         workspaceRoot: workspaceRootFromRequestContext(session.requestContext),
-      })) {
-        session.stream.write(frame)
-      }
-      trace(`exec: REFUSED ${label} toolName=${parsed.toolName} id=${parsed.id}`)
-      return true
-    } catch (e) {
-      const error = new Error(
-        `Failed to reject Cursor tool request (${label}): ${(e as Error).message}`,
-      )
-      trace(`exec: REFUSED reply FAILED ${error.message}`)
-      safeError(error)
-      sessionManager.close(session)
-      return false
-    }
+      }),
+      `reject ${label} id=${parsed.id}`,
+    )
+    if (ok) trace(`exec: REFUSED ${label} toolName=${parsed.toolName} id=${parsed.id}`)
+    return ok
   }
 
   /**
@@ -1991,6 +2109,7 @@ export async function pump(
 
   const emitText = (text: string) => {
     if (!text) return
+    assistantText += text
     replaySafety.markBarrier("visible-text")
     // Close reasoning before text (hosts expect reasoning-end before text-start).
     if (reasoningStarted && !textStarted) {
@@ -2022,13 +2141,14 @@ export async function pump(
   ) => {
     closeOpenSpans()
     const est = session.usageEstimate
-    // OpenCode persists and sums every AI SDK finish. Cursor does not expose a
-    // final context total at tool boundaries, so charging the growing estimate
-    // there multiplies one held Run across all of its steps. Emit zero at
-    // intermediate boundaries, then prefer checkpoint tokenDetails exactly once
-    // when TurnEnded closes the held Run. Cursor CLI keeps context occupancy in
-    // agentStore tokenDetails; it does not reinterpret TurnEnded as occupancy.
-    const tokenDetails = te ? session.tokenDetails : undefined
+    // OpenCode TUI/GUI replace each assistant message's tokens (they do not
+    // sum occupancy) and the TUI footer requires tokens.output > 0. Cost is
+    // added per step-finish. Emit checkpoint occupancy snapshots at tool-call
+    // boundaries with a $0 Copilot cost override, then the billed TurnEnded
+    // snapshot once at stop. Char/4 usageEstimate stays traces-only.
+    const tokenDetails = session.tokenDetails
+    const occupancyDetails =
+      !te && tokenDetails && tokenDetails.usedTokens > 0 ? tokenDetails : undefined
     const contextSource: CursorContextUsageSource | undefined = tokenDetails
       ? session.tokenDetailsFresh
         ? "checkpoint-current-run"
@@ -2045,15 +2165,32 @@ export async function pump(
             },
           )
         : emptyLanguageModelV3Usage()
-      : emptyLanguageModelV3Usage())
+      : occupancyDetails
+        ? occupancyUsageFromTokenDetails(
+            occupancyDetails,
+            session.cacheDiagnostics?.priorTokenDetails,
+          )
+        : emptyLanguageModelV3Usage())
     const providerMetadata = te
       ? cursorTurnEndedProviderMetadata(te, tokenDetails, contextSource)
-      : undefined
+      : occupancyDetails && contextSource
+        ? {
+            ...OPENCODE_DISPLAY_ONLY_COST_METADATA,
+            cursor: {
+              usageVersion: 3,
+              occupancyOnly: true,
+              context: cursorContextUsageMetadata(occupancyDetails, contextSource),
+            },
+          }
+        : undefined
     const reasonLabel = typeof reason === "object" && reason && "unified" in reason
       ? String((reason as { unified?: string }).unified ?? "unknown")
       : String(reason)
     const inTotal = usage.inputTokens?.total ?? 0
     const outTotal = usage.outputTokens?.total ?? 0
+    const occupancySource = occupancyDetails
+      ? `occupancy-${contextSource ?? "unavailable"}`
+      : "intermediate-zero"
     trace(
       `finish: reason=${reasonLabel} ` +
         `v3In=${inTotal} v3Out=${outTotal} ` +
@@ -2065,7 +2202,7 @@ export async function pump(
         `rawCacheWrite=${te ? turnEndedCounter(te, "cache_write") : est.cacheWrite} ` +
         `source=${te
           ? settledSource ?? (contextSource ?? "unavailable")
-          : "intermediate-zero"}`,
+          : occupancySource}`,
     )
     if (counters) {
       trace(formatTurnUsageValidation(counters, usage, tokenDetails, contextSource))
@@ -2074,6 +2211,19 @@ export async function pump(
         tokenDetails,
         cacheDiagnostics.priorTokenDetails,
         cacheDiagnostics,
+      ))
+    } else if (occupancyDetails) {
+      trace(formatTurnUsageValidation(
+        {
+          inputTokens: occupancyDetails.usedTokens,
+          outputTokens: 1,
+          cacheRead: session.cacheDiagnostics?.priorTokenDetails?.usedTokens ?? 0,
+          cacheWrite: 0,
+          reasoningTokens: 0,
+        },
+        usage,
+        occupancyDetails,
+        contextSource,
       ))
     }
     safeEnqueue({
@@ -2257,6 +2407,36 @@ export async function pump(
           )
         })
       }
+      const checkpoint = session.resumeCheckpoint ?? getCheckpoint(session.conversationId)
+      if (
+        typeof session.reopenWithUserMessage === "function"
+        && checkpoint
+        && checkpoint.length > 0
+        && shouldContinueProgressOnlyTurn({
+             allowTools: session.allowTools,
+             advertisedToolCount: advertisedToolNames.length,
+             assistantText,
+             emittedHostTools,
+             continuationAttempts: progressContinuationAttempts,
+             pendingExecs: session.pending.size,
+           })
+      ) {
+        progressContinuationAttempts += 1
+        trace("progress-only: continuing attempt=1")
+        try {
+          await session.reopenWithUserMessage(
+            progressOnlyContinuationPrompt(
+              workspaceRootFromRequestContext(session.requestContext),
+            ),
+          )
+          assistantText = ""
+          continue
+        } catch (error) {
+          // Cursor already completed this turn. A failed nudge must not discard
+          // the valid turn_ended the user already received as assistant text.
+          trace(`progress-only: continuation failed, finishing original turn: ${(error as Error).message}`)
+        }
+      }
       emitFinish(
         turnEnded,
         { unified: "stop", raw: undefined },
@@ -2345,6 +2525,7 @@ export async function pump(
               `display BRIDGED tool-call toolCallId=${toolCallId} toolName=${bridged.toolName} ` +
                 `variant=${bridged.variant} callId=${callId} inputLen=${input.length}`,
             )
+            emittedHostTools++
             closeOpenSpans()
             safeEnqueue({
               type: "tool-call",
@@ -2492,7 +2673,7 @@ export async function pump(
         trace(`exec: id=${parsed?.id} variant=${parsed ? Object.keys(parsed).join(",") : "none"} toolName=${parsed?.toolName} resultField=${parsed?.resultField}`)
         if (parsed) {
           if (parsed.localError) {
-            if (!rejectExec(parsed, parsed.localError, "invalid mapping")) return
+            if (!await rejectExec(parsed, parsed.localError, "invalid mapping")) return
             continue
           }
           // OpenCode throws "Tool call not allowed while generating summary"
@@ -2501,7 +2682,7 @@ export async function pump(
           // pumping for text / turn_ended instead of emitting tool-call.
           if (!session.allowTools) {
             const reason = "Tool calls are not available during this turn (summary/compaction)."
-            if (!rejectExec(parsed, reason, "allowTools=false")) return
+            if (!await rejectExec(parsed, reason, "allowTools=false")) return
             continue
           }
           // Cursor writes a generated image with an ordinary write exec whose
@@ -2515,7 +2696,7 @@ export async function pump(
               const reason =
                 "This OpenCode agent cannot write binary file content. "
                 + "Do not retry this write with the same bytes."
-              if (!rejectExec(parsed, reason, "binary write unsupported")) return
+              if (!await rejectExec(parsed, reason, "binary write unsupported")) return
               continue
             }
             const workspaceRoot = workspaceRootFromRequestContext(session.requestContext)
@@ -2534,7 +2715,7 @@ export async function pump(
                 sessionId: session.openCodeSessionId,
               })
             } catch (error) {
-              if (!rejectExec(parsed, (error as Error).message, "binary write too large")) return
+              if (!await rejectExec(parsed, (error as Error).message, "binary write too large")) return
               continue
             }
             if (displayCallId) session.displayToolCalls.delete(displayCallId)
@@ -2557,6 +2738,7 @@ export async function pump(
                 `requested=${JSON.stringify(binaryWrite.path)} target=${JSON.stringify(target)} ` +
                 `bytes=${binaryWrite.data.length}`,
             )
+            emittedHostTools++
             closeOpenSpans()
             safeEnqueue({
               type: "tool-call",
@@ -2585,7 +2767,7 @@ export async function pump(
               `exec: unavailable catalog target toolName=${parsed.toolName} ` +
                 `advertised=[${advertisedToolNames.join(",")}]`,
             )
-            if (!rejectExec(parsed, reason, "unavailable tool")) return
+            if (!await rejectExec(parsed, reason, "unavailable tool")) return
             continue
           }
           if (recoverCorrelatedEditRead(parsed, displayCallId)) continue
@@ -2615,6 +2797,7 @@ export async function pump(
           )
           // tc.input is already a JSON string (LanguageModelV3ToolCall.input).
           trace(`exec: EMITTED tool-call toolCallId=${tc.toolCallId} toolName=${tc.toolName} inputLen=${tc.input.length}`)
+          emittedHostTools++
           // Close open text/reasoning spans before tool-call (required by AI SDK V3).
           closeOpenSpans()
           safeEnqueue({
@@ -2626,11 +2809,39 @@ export async function pump(
           emitFinish(undefined, { unified: "tool-calls", raw: undefined })
           return
         }
+        // Known Cursor-native exec variants with no safe OpenCode bridge are
+        // soft-denied with a populated typed result or throw, so the turn
+        // continues with remaining tools. Unknown fields still hard-fail.
+        const variantField = detectExecVariantField(payload)
+        const variant = variantField !== undefined
+          ? cursorExecVariantByRequestField(variantField)
+          : undefined
+        if (variant?.handling === "unsupported") {
+          const advertised = advertisedToolNames.length > 0 ? advertisedToolNames.join(", ") : "none"
+          const rawReason =
+            `Cursor-native '${variant.requestName}' is not available on this host. Continue with listed tools: ${advertised}; do not retry '${variant.requestName}'.`
+          const grounded = appendWorkspaceRootGrounding(
+            rawReason,
+            workspaceRootFromRequestContext(session.requestContext),
+          )
+          // Allowlist/status denies have no string channel; buildUnsupportedExecDeny
+          // ignores `reason` for those shapes and still selects the typed oneof.
+          const frames = buildUnsupportedExecDeny({ execId: esmId, variant, reason: grounded })
+          try {
+            for (const frame of frames) {
+              await writeWithBackpressure(session.stream, frame, `unsupported deny ${variant.requestName} id=${esmId}`)
+            }
+          } catch (error) {
+            rethrowTransportWriteFailure(error)
+            failRunProtocol("Cursor unsupported exec deny reply failed", RUN_REPLY_FAILED)
+          }
+          trace(`exec: SOFT-DENIED ${variant.requestName} id=${esmId}`)
+          continue
+        }
         // Never guess a response type for an unknown exec variant. Request and
         // result field numbers are not universally identical; a structurally
         // wrong reply recreates the heartbeat-only deadlock. Fail promptly so
         // schema drift is actionable.
-        const variantField = detectExecVariantField(payload)
         const variantDescription = describeCursorExecVariant(variantField)
         const hex = Array.from(payload.subarray(0, 48))
           .map((x) => x.toString(16).padStart(2, "0"))
@@ -2727,6 +2938,7 @@ export async function pump(
             `questions=${ask.args.questions.length} runAsync=${ask.args.runAsync} ` +
             `cursorToolCallId=${ask.toolCallId || "(none)"}`,
         )
+        emittedHostTools++
         closeOpenSpans()
         safeEnqueue({
           type: "tool-call",
@@ -2786,6 +2998,7 @@ export async function pump(
             `target=${JSON.stringify(sw.args.targetModeId)} ` +
             `cursorToolCallId=${sw.toolCallId || "(none)"}`,
         )
+        emittedHostTools++
         closeOpenSpans()
         safeEnqueue({
           type: "tool-call",
@@ -2835,6 +3048,7 @@ export async function pump(
         // text stream, so nothing has shown it yet. Put it in the transcript
         // before asking — approving a plan you cannot read is not approval.
         if (plan.planReview) emitText(plan.planReview)
+        emittedHostTools++
         closeOpenSpans()
         safeEnqueue({
           type: "tool-call",
@@ -3103,6 +3317,9 @@ export function buildOpenCodeInteractionGuidance(
       : []),
     ...instructions,
     "Emit the actual tool call and wait for its result; never merely claim or summarize that a tool was used.",
+    "A progress update such as \"Checking…\", \"Inspecting…\", or \"Let me look…\" is not a final answer.",
+    "After progress narration, call a listed tool in the same turn; if no tool is needed, provide the complete user-facing answer before finishing.",
+    "Never end a turn with progress narration alone.",
   ].join("\n")
 }
 
