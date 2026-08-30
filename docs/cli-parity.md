@@ -1,8 +1,10 @@
 # Feature Parity: cursor-opencode-provider vs Cursor CLI
 
-Comparison against the decompiled Cursor agent CLI **2026.08.11-e8db854** (local `~/.local/share/cursor-agent/versions/`; client version resolved via `src/protocol/client-version.ts`). Last verified 2026-08-18.
+Comparison against the decompiled Cursor agent CLI **2026.08.25-3e8eec8** (local `~/.local/share/cursor-agent/versions/`; client version resolved via `src/protocol/client-version.ts`). Last verified 2026-08-30.
 
-**Legend:** ✅ full parity · 🔶 partial/adapted · ❌ not implemented · ⚪ N/A (not a CLI concern)
+Parity target is interactive `cursor-agent` (`Run` client: TUI and `--print`). `cursor-agent worker` / `runBridgeMode` / Cloud Agents are out of scope.
+
+**Legend:** ✅ full parity · 🔶 partial/adapted · ❌ not implemented · ⚪ N/A (not an interactive CLI concern)
 
 ## Wire protocol (agent service)
 
@@ -19,7 +21,7 @@ Comparison against the decompiled Cursor agent CLI **2026.08.11-e8db854** (local
 
 ## Tools (exec requests) — `src/protocol/exec-variants.ts`
 
-| Tool | Cursor CLI | This provider | Match |
+| Tool | Interactive CLI | This provider | Match |
 |---|---|---|---|
 | read / write / edit / delete / grep / ls | Native | Native + OpenCode permission-aware read/write; edit via catalog-aware remap | ✅ |
 | apply_patch (edit/write substitution) | Native `apply_patch` exists | Synthesizes `apply_patch` envelopes when OpenCode 1.x drops edit/write | 🔶 (parity by design) |
@@ -27,27 +29,31 @@ Comparison against the decompiled Cursor agent CLI **2026.08.11-e8db854** (local
 | mcp, list_mcp_resources, read_mcp_resource, mcp_state | Native | MCP exec + provider-control variants | ✅ |
 | subagent, subagent_await | Full SubagentType oneof (computer_use, browser_use, explore, custom, bash, shell, vm_setup_helper, debug, cursor_guide, watch_video, media_review) + permission modes | subagent bridged to OpenCode `task`; subtype set limited to what OpenCode advertises; await unsupported | 🔶 |
 | request_context | Native | provider-control | ✅ |
-| diagnostics, canvas_diagnostics | Native | ❌ | ❌ |
+| diagnostics | Native (codebase-ref / LSP; stub empty list if `--disable-codebase-ref`) | ❌ | ❌ |
+| canvas_diagnostics | Worker exec-daemon only (`getCanvasDiagnostics`); interactive `createLocalResourceProvider` never registers it | — | ⚪ |
 | fetch / web_fetch | Native exec + UI | Native exec unsupported; capability via host `custom_webfetch` / `webfetch` (see Interactions) | 🔶 (parity by design) |
-| record_screen, computer_use | Native (X11/xdotool, worker) | ❌ | ❌ |
-| execute_hook, redacted_read, smart_mode_classifier, git_diff_request | Native | ❌ | ❌ |
+| record_screen, computer_use | Native X11 executor is worker-only (`setupDaemon` `--computer-use` / `enableRecordScreen`). Interactive: `--computer-use-coords` (coords only), Darwin harness stub throws, Mac bundled `computer-use` MCP — not exec #21/#22 | — | ⚪ |
+| execute_hook | Native (interactive `hookExecutor`) | ❌ | ❌ |
+| redacted_read | Worker-only inbound exec #29; registered only when `isSecretRedactionEnabled` (bridge hardcodes `true`; interactive never sets `registerRedactedReadExecutor`) | Soft-deny | ⚪ |
+| smart_mode_classifier | Native (interactive auto-review) | ❌ | ❌ |
+| git_diff_request | Native (always registered) | ❌ | ❌ |
 | pi_read/bash/edit/write/grep/find/ls (Pi/OMP protocol) | — | ✅ (pi-bridge hosts) | ✅ (provider extra) |
 
 ## Interactions (server-side queries)
 
-| Interaction | Cursor CLI | This provider | Match |
+| Interaction | Interactive CLI | This provider | Match |
 |---|---|---|---|
 | #2 web_search | Native search UI | Rejected by design; `web_search_enabled=false` so Cursor prefers host `custom_websearch` (interaction replies cannot carry OpenCode tool results) | 🔶 (parity by design) |
 | #3 ask_question | Blocks until user answers; async variant via `async_ask_question_completion_action` | Bridged to OpenCode `question` tool, CLI-verbatim semantics, async echo of server args | ✅ |
 | #4 switch_mode | Blocks until approve/reject | Three tiers: native `plan_enter`/`plan_exit` when advertised → else enter-plan approved outright → else leave-plan via host `question`; CLI-shaped system reminder injected on next Run | ✅ |
 | #7 create_plan | Writes Cursor plan file, returns plan_uri | Writes plain markdown to host `plans/` dir; execution gated (host plan-stage tool or `question` after plan review); classic plugin kickoff on Yes | 🔶 |
-| #8 setup_vm | Full VM env setup | Ack `success:{}` | 🔶 |
+| #8 setup_vm | Ack `success:{}` (no VM; TUI `setupVmEnvironmentArgs` is the same no-op) | Ack `success:{}` | ✅ |
 | #9 web_fetch | Native fetch UI | Rejected by design; `web_fetch_enabled=false` so Cursor prefers host `custom_webfetch` / `webfetch` | 🔶 (parity by design) |
-| #10 pr_management | Native PR workflow (gh) | Rejected | ❌ |
-| #11 mcp_auth | OAuth flow (pkce, Slack client-id) | Rejected | ❌ |
+| #10 pr_management | Errors `PR management is only available in cloud agents` | Rejected | ⚪ |
+| #11 mcp_auth | Rejected (`MCP authentication is not supported in CLI mode`) | Rejected | ⚪ |
 | #12 generate_image | Approve → server generates → binary write exec | Approve + stage bytes + `cursor_image_save` plugin tool (permission-gated), byte-exact verified | ✅ |
-| #13 replace_env | Native | Failed (`Environment replacement is not supported…`) | 🔶 |
-| #14 connect_scm | Native SCM connect | Rejected | ❌ |
+| #13 replace_env | Failed (`Environment replacement is not supported in CLI mode`) | Failed (`Environment replacement is not supported by the OpenCode provider.`) | ✅ |
+| #14 connect_scm | Rejected (`Connecting GitHub is not supported in CLI mode`) | Rejected | ⚪ |
 
 ## Display / transcript surface
 
@@ -89,11 +95,13 @@ Comparison against the decompiled Cursor agent CLI **2026.08.11-e8db854** (local
 
 ## Beyond the wire (CLI-only surface)
 
-These have no provider equivalent by design — the provider is a *host language model*, not a terminal app: commands (`agent`, `ls`, `resume`, `login`, `cloud`, `env`, `mcp`, `sandbox`, `worker`, `automations`, `repo search`, `bedrock`, `acp`…), TUI, headless `-p` modes, notifications (OSC 9/777/99), sudo askpass, PR opening, cursor-blame, background-jobs UI, history rewind, statsig gating, worktrees, sandbox binary, PDF worker, terminal image rendering. ⚪/❌ where Cursor needs them (e.g. goal continuation, autorun, queued-message-enter — the host OpenCode provides the equivalents: autorun, plan mode, resume).
+These have no provider equivalent by design — the provider is a *host language model*, not a terminal app: commands (`agent`, `ls`, `resume`, `login`, `cloud`, `env`, `mcp`, `sandbox`, `worker`, `automations`, `repo search`, `bedrock`, `acp`…), TUI, headless `-p` modes, notifications (OSC 9/777/99), sudo askpass, cursor-blame, background-jobs UI, history rewind, statsig gating, worktrees, sandbox binary, PDF worker, terminal image rendering. ⚪/❌ where Cursor needs them (e.g. goal continuation, autorun, queued-message-enter — the host OpenCode provides the equivalents: autorun, plan mode, resume).
+
+Worker / cloud-bridge only (not a parity target): secret redaction / `redacted_read`, X11 computer-use and record-screen executors, `replace_env` as a working VM swap, PR management, `readOnlyBareMode`, `--pool` / `ClaimWorker`, mounted agent-store claim.
 
 ## Bottom line
 
 - **Core agent protocol:** near-total parity — every message class, checkpoint/KV semantics, token accounting, backpressure, and the interaction machinery are mirrored, many CLI-verbatim.
-- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants and background shell spawn; deliberately unsupported: shell stdin/force/allowlist, computer use, record_screen, hooks, diagnostics, redacted_read, git_diff, smart_mode_classifier.
-- **Interactions:** 3 ✅ bridges (ask_question, switch_mode, generate_image) + CreatePlan 🔶 (host plan file + execution gate); web search/fetch rejected by design and covered by host `custom_websearch` / `custom_webfetch`; setup_vm acked; replace_env failed; PR / MCP auth / SCM rejected.
-- **Biggest remaining gaps:** PR management, MCP OAuth approval, computer use/screen recording, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, git_diff / diagnostics exec, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch are **not** gaps.
+- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants and background shell spawn; deliberately unsupported vs interactive CLI: shell stdin/force/allowlist, hooks, diagnostics, git_diff, smart_mode_classifier. Native computer-use / record_screen / redacted_read are worker-only, not gaps.
+- **Interactions:** 3 ✅ bridges (ask_question, switch_mode, generate_image) + CreatePlan 🔶 (host plan file + execution gate); web search/fetch rejected by design and covered by host `custom_websearch` / `custom_webfetch`; setup_vm and replace_env match the interactive CLI (ack / fail). PR / MCP auth / SCM are not interactive CLI capabilities.
+- **Biggest remaining gaps:** diagnostics and git_diff exec, hooks, smart_mode_classifier, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch, PR management, computer use, and screen recording are **not** interactive gaps.
