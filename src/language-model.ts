@@ -44,6 +44,7 @@ import {
   type OpencodeToolDef,
   type ParsedExecRequest,
 } from "./protocol/tools.js"
+import { buildGitDiffExecMessages } from "./protocol/git-diff.js"
 import { cursorExecVariantByRequestField, describeCursorExecVariant } from "./protocol/exec-variants.js"
 import { appendWorkspaceRootGrounding } from "./protocol/workspace-grounding.js"
 import {
@@ -1537,6 +1538,7 @@ export function deliverContinuationResults(
       try {
         const shellResult =
           pending.resultField === "shell_stream"
+          || pending.resultField === "shell_result"
           || pending.resultField === "background_shell_spawn_result"
             ? consumeCursorShellResult(r.toolCallId, r.output)
             : undefined
@@ -2626,6 +2628,22 @@ export async function pump(
           rethrowTransportWriteFailure(error)
           failRunProtocol("Cursor read_mcp_resource reply failed", RUN_REPLY_FAILED)
         }
+      } else if (esm.git_diff_request) {
+        const request = (esm.git_diff_request ?? {}) as Record<string, unknown>
+        try {
+          const frames = await buildGitDiffExecMessages({
+            execId: esmId,
+            request,
+            workspaceRoot: workspaceRootFromRequestContext(session.requestContext),
+          })
+          for (const frame of frames) {
+            await writeWithBackpressure(session.stream, frame, `git_diff reply id=${esmId}`)
+          }
+          trace(`exec git_diff: replied id=${esmId}`)
+        } catch (error) {
+          rethrowTransportWriteFailure(error)
+          failRunProtocol("Cursor git_diff reply failed", RUN_REPLY_FAILED)
+        }
       } else {
         replaySafety.markBarrier("non-control-exec")
         const displayCallId = extractExecDisplayCallId(esm)
@@ -2782,6 +2800,7 @@ export async function pump(
           const tc = buildToolCallPart(parsed, session.sessionId)
           if (
             parsed.resultField === "shell_stream"
+            || parsed.resultField === "shell_result"
             || parsed.resultField === "background_shell_spawn_result"
           ) {
             registerCursorShellCall(tc.toolCallId, parsed.resultMetadata)

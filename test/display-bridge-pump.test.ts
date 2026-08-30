@@ -885,7 +885,7 @@ describe("display-only ToolCall pump bridge", () => {
     expect(session.closed).toBe(true)
   })
 
-  it("soft-denies git diff with a throw and keeps pumping", async () => {
+  it("answers git_diff as provider-control and throws when cwd is not a repo", async () => {
     const writes: Uint8Array[] = []
     const session = fakeSession([rawExecPayload(42, 44), turnEndedPayload()], writes)
     session.requestContext.env = { workspace_paths: ["/tmp"] }
@@ -898,14 +898,13 @@ describe("display-only ToolCall pump bridge", () => {
 
     expect(writes.length).toBeGreaterThanOrEqual(2)
     const thrown = decodeMessage<any>("AgentClientMessage", writes[0]!).exec_client_control_message.throw
-    expect(thrown.error).toContain("Cursor-native 'git_diff_request' is not available")
-    expect(thrown.error).toContain("Workspace root:")
+    expect(thrown.error).toMatch(/not a git repository|fatal:/i)
     expect(decodeMessage<any>("AgentClientMessage", writes[1]!).exec_client_control_message.stream_close.id).toBe(42)
   })
 
   it("distinguishes future protocol drift from a known unsupported exec", async () => {
     const writes: Uint8Array[] = []
-    const session = fakeSession([rawExecPayload(42, 53)], writes)
+    const session = fakeSession([rawExecPayload(42, 99)], writes)
     const controller = {
       enqueue() {},
       error() {},
@@ -914,7 +913,7 @@ describe("display-only ToolCall pump bridge", () => {
     await expect(
       pump(session, controller, { textId: "text", reasoningId: "reasoning" }),
     ).rejects.toMatchObject({
-      message: "Unsupported Cursor exec variant unknown request field #53 (id=42)",
+      message: "Unsupported Cursor exec variant unknown request field #99 (id=42)",
       code: "CURSOR_RUN_REQUEST_UNSUPPORTED",
     })
     expect(writes).toHaveLength(0)

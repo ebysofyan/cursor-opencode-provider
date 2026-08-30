@@ -21,7 +21,7 @@ export type CursorExecVariant = {
 }
 
 export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
-  { requestField: 2, requestName: "shell_args", resultField: 2, resultName: "shell_result", handling: "unsupported" },
+  { requestField: 2, requestName: "shell_args", resultField: 2, resultName: "shell_result", handling: "opencode-tool" },
   { requestField: 3, requestName: "write_args", resultField: 3, resultName: "write_result", handling: "opencode-tool" },
   { requestField: 4, requestName: "delete_args", resultField: 4, resultName: "delete_result", handling: "opencode-tool" },
   { requestField: 5, requestName: "grep_args", resultField: 5, resultName: "grep_result", handling: "opencode-tool" },
@@ -50,7 +50,7 @@ export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
   { requestField: 41, requestName: "shell_allowlist_precheck_args", resultField: 41, resultName: "shell_allowlist_precheck_result", handling: "unsupported" },
   { requestField: 42, requestName: "mcp_allowlist_precheck_args", resultField: 42, resultName: "mcp_allowlist_precheck_result", handling: "unsupported" },
   { requestField: 43, requestName: "web_fetch_allowlist_precheck_args", resultField: 43, resultName: "web_fetch_allowlist_precheck_result", handling: "unsupported" },
-  { requestField: 44, requestName: "git_diff_request", resultField: 44, resultName: "git_diff_response", handling: "unsupported" },
+  { requestField: 44, requestName: "git_diff_request", resultField: 44, resultName: "git_diff_response", handling: "provider-control" },
   { requestField: 45, requestName: "pi_read_args", resultField: 46, resultName: "pi_read_result", handling: "opencode-tool" },
   { requestField: 46, requestName: "pi_bash_args", resultField: 47, resultName: "pi_bash_result", handling: "opencode-tool" },
   { requestField: 47, requestName: "pi_edit_args", resultField: 48, resultName: "pi_edit_result", handling: "opencode-tool" },
@@ -58,6 +58,12 @@ export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
   { requestField: 49, requestName: "pi_grep_args", resultField: 50, resultName: "pi_grep_result", handling: "opencode-tool" },
   { requestField: 50, requestName: "pi_find_args", resultField: 51, resultName: "pi_find_result", handling: "opencode-tool" },
   { requestField: 51, requestName: "pi_ls_args", resultField: 52, resultName: "pi_ls_result", handling: "opencode-tool" },
+  // Mini-SWE request #52 pairs with ShellResult at #55 (Pi-style offset; #55
+  // request is accept_hook_additional_contexts, not a variant).
+  { requestField: 52, requestName: "mini_swe_agent_bash_args", resultField: 55, resultName: "mini_swe_agent_bash_result", handling: "unsupported" },
+  { requestField: 53, requestName: "conversation_search_args", resultField: 53, resultName: "conversation_search_result", handling: "unsupported" },
+  { requestField: 54, requestName: "agent_store_conflict_args", resultField: 54, resultName: "agent_store_conflict_result", handling: "unsupported" },
+  { requestField: 56, requestName: "adopt_args", resultField: 56, resultName: "adopt_result", handling: "unsupported" },
 ] as const
 
 const BY_REQUEST_FIELD = new Map(CURSOR_EXEC_VARIANTS.map((variant) => [variant.requestField, variant]))

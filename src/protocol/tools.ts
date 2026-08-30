@@ -316,6 +316,8 @@ export function buildLiveRequestContext(
 // does not. This provider intentionally remaps:
 //   - delete_args → bash `rm -f -- <quoted-path>`
 //   - background_shell_spawn_args → bash (original command; plugin wraps nohup)
+//   - shell_args (#2) → bash, same timeout/background path as shell_stream; the
+//     reply stays ShellResult (not the streaming oneof).
 // Permissions still flow through OpenCode's advertised `bash` tool. Soft-
 // background / detached children can outlive the OpenCode tool call; leftover
 // process cleanup is left to the user / OS. Arg key remapping happens below.
@@ -332,6 +334,7 @@ const cursorToolToOpencode: Record<string, string> = {
   grep_args: "grep",
   ls_args: "read",
   delete_args: "bash",
+  shell_args: "bash",
   shell_stream_args: "bash",
   background_shell_spawn_args: "bash",
   subagent_args: "task",
@@ -949,7 +952,7 @@ export function parseExecServerMessage(
     "pi_read_args", "pi_bash_args", "pi_edit_args", "pi_write_args",
     "pi_grep_args", "pi_find_args", "pi_ls_args",
     "grep_args", "ls_args",
-    "delete_args", "shell_stream_args", "background_shell_spawn_args", "mcp_args",
+    "delete_args", "shell_args", "shell_stream_args", "background_shell_spawn_args", "mcp_args",
     "subagent_args",
   ])
   if (!execVariant) return undefined
@@ -1075,7 +1078,7 @@ export function parseExecServerMessage(
     execVariant,
   )
   const rawArgs = (msg[execVariant] as Record<string, unknown>) ?? {}
-  const resultMetadata = execVariant === "shell_stream_args"
+  const resultMetadata = execVariant === "shell_stream_args" || execVariant === "shell_args"
     ? shellStreamResultMetadata(rawArgs)
     : execVariant === "read_args"
       ? {
@@ -1747,17 +1750,64 @@ export function buildUnsupportedExecDeny(input: {
         }),
       )
       break
+    case "mini_swe_agent_bash_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            mini_swe_agent_bash_result: { rejected: { reason } },
+          },
+        }),
+      )
+      break
+    case "conversation_search_result":
+      // No local Cursor conversation index. Empty success is truthful and
+      // avoids a retry loop; the model can continue with listed tools.
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            conversation_search_result: {
+              success: { hits: [], truncated: false, partial: false, rebuilding: false },
+            },
+          },
+        }),
+      )
+      break
+    case "agent_store_conflict_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            agent_store_conflict_result: { error: { error: reason } },
+          },
+        }),
+      )
+      break
+    case "adopt_result":
+      frames.push(
+        encodeMessage("AgentClientMessage", {
+          exec_client_message: {
+            id: execId,
+            local_execution_time_ms: 0,
+            adopt_result: { error: reason },
+          },
+        }),
+      )
+      break
     case "execute_hook_result":
-    case "git_diff_response":
-      // agent.proto has no populated error oneof we can emit for these two;
-      // Cursor CLI answers them through exec_client_control_message.throw.
+      // agent.proto has no populated error oneof we can emit;
+      // Cursor CLI answers this through exec_client_control_message.throw.
       frames.push(throwFrame(reason))
       frames.push(buildExecStreamClose(execId))
       return frames
     default:
       // Fallback for any future unsupported variant without a dedicated shape:
       // typed error when possible, else throw. Unknown shapes should hard-fail
-      // at the pump, so this path is not expected for the 17 known rows.
+      // at the pump, so this path is not expected for known unsupported rows.
       frames.push(throwFrame(reason))
       frames.push(buildExecStreamClose(execId))
       return frames
@@ -1932,6 +1982,58 @@ export function buildTypedExecResult(
       const content = unwrapReadOutput(output)
       const truncation = readTruncationMessage(output, content)
       return { success: { output: content, ...(truncation ? { truncation } : {}) } }
+    }
+    case "shell_result": {
+      const command = str(resultMetadata?.command) ?? ""
+      const workingDirectory = str(resultMetadata?.working_directory) ?? ""
+      if (error) {
+        return {
+          failure: {
+            command,
+            working_directory: workingDirectory,
+            exit_code: 1,
+            stdout: output || "",
+            stderr: error,
+            aborted: false,
+          },
+        }
+      }
+      if (shellOutcome?.kind === "timeout") {
+        return {
+          timeout: {
+            command,
+            working_directory: workingDirectory,
+            timeout_ms: shellOutcome.timeoutMs,
+          },
+        }
+      }
+      if (shellOutcome?.kind === "backgrounded") {
+        return {
+          success: {
+            command: shellOutcome.command || command,
+            working_directory: shellOutcome.workingDirectory || workingDirectory,
+            exit_code: 0,
+            stdout: output,
+            shell_id: shellOutcome.shellId,
+            pid: shellOutcome.pid,
+            ms_to_wait: shellOutcome.msToWait,
+            background_reason: shellOutcome.reason,
+          },
+          is_background: true,
+          pid: shellOutcome.pid,
+        }
+      }
+      const exitCode = shellOutcome?.kind === "exit"
+        ? Math.max(0, Math.min(0xffff_ffff, shellOutcome.code))
+        : 0
+      return {
+        success: {
+          command,
+          working_directory: workingDirectory,
+          exit_code: exitCode,
+          stdout: output,
+        },
+      }
     }
     case "pi_bash_result":
     case "pi_edit_result":

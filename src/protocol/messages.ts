@@ -773,9 +773,50 @@ export function createMessageTypes(): protobuf.Root {
   // ── Soft-deny stubs for known unsupported Cursor-native exec variants ──
   // These are encode-only: enough to emit a populated deny, not full success.
   // Canonical field numbers from agent.proto ExecClientMessage.
-  addType(root, "ShellResult", [
-    { id: 4, name: "rejected", type: "ShellRejected" },
-  ], [{ name: "result", fields: ["rejected"] }])
+  // ShellResult is also the live reply for exec #2 shell_args (OpenCode bash).
+  addType(root, "ShellSuccess", [
+    { id: 1, name: "command", type: "string" },
+    { id: 2, name: "working_directory", type: "string" },
+    { id: 3, name: "exit_code", type: "int32" },
+    { id: 4, name: "signal", type: "string" },
+    { id: 5, name: "stdout", type: "string" },
+    { id: 6, name: "stderr", type: "string" },
+    { id: 7, name: "execution_time", type: "int32" },
+    { id: 9, name: "shell_id", type: "uint32" },
+    { id: 11, name: "pid", type: "uint32" },
+    { id: 12, name: "ms_to_wait", type: "int32" },
+    { id: 13, name: "local_execution_time_ms", type: "int32" },
+    { id: 14, name: "background_reason", type: "uint32" },
+  ])
+  addType(root, "ShellFailure", [
+    { id: 1, name: "command", type: "string" },
+    { id: 2, name: "working_directory", type: "string" },
+    { id: 3, name: "exit_code", type: "int32" },
+    { id: 4, name: "signal", type: "string" },
+    { id: 5, name: "stdout", type: "string" },
+    { id: 6, name: "stderr", type: "string" },
+    { id: 7, name: "execution_time", type: "int32" },
+    { id: 10, name: "abort_reason", type: "uint32" },
+    { id: 11, name: "aborted", type: "bool" },
+  ])
+  addType(root, "ShellTimeout", [
+    { id: 1, name: "command", type: "string" },
+    { id: 2, name: "working_directory", type: "string" },
+    { id: 3, name: "timeout_ms", type: "int32" },
+  ])
+  addType(
+    root,
+    "ShellResult",
+    [
+      { id: 1, name: "success", type: "ShellSuccess" },
+      { id: 2, name: "failure", type: "ShellFailure" },
+      { id: 3, name: "timeout", type: "ShellTimeout" },
+      { id: 4, name: "rejected", type: "ShellRejected" },
+      { id: 102, name: "is_background", type: "bool" },
+      { id: 104, name: "pid", type: "uint32" },
+    ],
+    [{ name: "result", fields: ["success", "failure", "timeout", "rejected"] }],
+  )
   addType(root, "DiagnosticsError", [
     { id: 1, name: "path", type: "string" },
     { id: 2, name: "error", type: "string" },
@@ -842,6 +883,106 @@ export function createMessageTypes(): protobuf.Root {
   ])
   addType(root, "ForceBackgroundSubagentResult", [
     { id: 1, name: "status", type: "uint32" },
+  ])
+  addType(root, "ConversationSearchHit", [
+    { id: 1, name: "conversation_id", type: "string" },
+    { id: 2, name: "title", type: "string" },
+    { id: 3, name: "source", type: "uint32" },
+    { id: 4, name: "updated_at_ms", type: "int64" },
+    { id: 5, name: "snippet", type: "string" },
+  ])
+  addType(root, "ConversationSearchSuccess", [
+    { id: 1, name: "hits", type: "ConversationSearchHit", repeated: true },
+    { id: 2, name: "truncated", type: "bool" },
+    { id: 3, name: "partial", type: "bool" },
+    { id: 4, name: "rebuilding", type: "bool" },
+  ])
+  addType(root, "ConversationSearchError", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(
+    root,
+    "ConversationSearchResult",
+    [
+      { id: 1, name: "success", type: "ConversationSearchSuccess" },
+      { id: 2, name: "error", type: "ConversationSearchError" },
+    ],
+    [{ name: "result", fields: ["success", "error"] }],
+  )
+  addType(root, "AgentStoreConflictError", [
+    { id: 1, name: "error", type: "string" },
+  ])
+  addType(
+    root,
+    "AgentStoreConflictResult",
+    [
+      { id: 2, name: "error", type: "AgentStoreConflictError" },
+    ],
+    [{ name: "result", fields: ["error"] }],
+  )
+  addType(
+    root,
+    "AdoptResult",
+    [
+      { id: 1, name: "source_agent_id", type: "string" },
+      { id: 2, name: "target_agent_id", type: "string" },
+      { id: 3, name: "project_root_id", type: "string" },
+      { id: 5, name: "error", type: "string" },
+    ],
+    [{ name: "result", fields: ["error"] }],
+  )
+
+  // aiserver.v1.GetDiffRequest / GetDiffResponse (exec #44). Enums as uint32
+  // so protobufjs json decode does not stringify output_format / diff_type.
+  addType(root, "GitDiffChunk", [
+    { id: 1, name: "content", type: "string" },
+    { id: 2, name: "lines", type: "string", repeated: true },
+    { id: 3, name: "old_start", type: "int32" },
+    { id: 4, name: "old_lines", type: "int32" },
+    { id: 5, name: "new_start", type: "int32" },
+    { id: 6, name: "new_lines", type: "int32" },
+  ])
+  addType(root, "GitFileDiff", [
+    { id: 1, name: "from", type: "string" },
+    { id: 2, name: "to", type: "string" },
+    { id: 3, name: "chunks", type: "GitDiffChunk", repeated: true },
+    { id: 4, name: "added", type: "int32" },
+    { id: 5, name: "removed", type: "int32" },
+    { id: 6, name: "before_file_contents", type: "string" },
+    { id: 7, name: "after_file_contents", type: "string" },
+    { id: 8, name: "is_generated", type: "bool" },
+  ])
+  addType(root, "GitDiff", [
+    { id: 1, name: "diffs", type: "GitFileDiff", repeated: true },
+    { id: 2, name: "diff_type", type: "uint32" },
+  ])
+  addType(root, "GitDiffSubmoduleDiff", [
+    { id: 1, name: "relative_path", type: "string" },
+    { id: 2, name: "diff", type: "GitDiff" },
+    { id: 3, name: "errored", type: "bool" },
+  ])
+  addType(root, "GetDiffRequest", [
+    { id: 1, name: "cwd", type: "string" },
+    { id: 2, name: "ref", type: "string" },
+    { id: 3, name: "base_ref", type: "string" },
+    { id: 4, name: "merge_base", type: "bool" },
+    { id: 5, name: "target_paths", type: "string", repeated: true },
+    { id: 6, name: "unified_context_lines", type: "int32" },
+    { id: 7, name: "max_untracked_files", type: "int32" },
+    { id: 8, name: "output_format", type: "uint32" },
+    { id: 9, name: "submodule_recurse_depth", type: "int32" },
+    { id: 10, name: "include_space_changes", type: "bool" },
+    { id: 11, name: "committed_only", type: "bool" },
+    { id: 12, name: "compute_patch_id", type: "bool" },
+    { id: 13, name: "return_head_sha", type: "bool" },
+    { id: 14, name: "max_response_bytes", type: "int32" },
+  ])
+  addType(root, "GetDiffResponse", [
+    { id: 1, name: "diff", type: "GitDiff" },
+    { id: 2, name: "submodule_diffs", type: "GitDiffSubmoduleDiff", repeated: true },
+    { id: 3, name: "patch_id", type: "string" },
+    { id: 4, name: "head_sha", type: "string" },
+    { id: 5, name: "has_uncommitted_changes", type: "bool" },
   ])
 
   // Cursor's non-blocking shell path is a separate exec variant from the
@@ -1220,6 +1361,7 @@ export function createMessageTypes(): protobuf.Root {
       { id: 1, name: "id", type: "uint32" },
       { id: 15, name: "exec_id", type: "string" },
       { id: 19, name: "span", type: "string" },
+      { id: 2, name: "shell_args", type: "ShellArgs" },
       { id: 3, name: "write_args", type: "WriteArgs" },
       { id: 4, name: "delete_args", type: "DeleteArgs" },
       { id: 5, name: "grep_args", type: "GrepArgs" },
@@ -1233,6 +1375,7 @@ export function createMessageTypes(): protobuf.Root {
       { id: 18, name: "read_mcp_resource_exec_args", type: "ReadMcpResourceExecArgs" },
       { id: 28, name: "subagent_args", type: "SubagentArgs" },
       { id: 36, name: "mcp_state_exec_args", type: "McpStateExecArgs" },
+      { id: 44, name: "git_diff_request", type: "GetDiffRequest" },
       { id: 45, name: "pi_read_args", type: "PiReadToolArgs" },
       { id: 46, name: "pi_bash_args", type: "PiBashToolArgs" },
       { id: 47, name: "pi_edit_args", type: "PiEditToolArgs" },
@@ -1242,10 +1385,10 @@ export function createMessageTypes(): protobuf.Root {
       { id: 51, name: "pi_ls_args", type: "PiLsToolArgs" },
     ],
     [{ name: "args", fields: [
-      "write_args", "delete_args", "grep_args", "read_args", "ls_args",
+      "shell_args", "write_args", "delete_args", "grep_args", "read_args", "ls_args",
       "request_context_args", "mcp_args", "shell_stream_args", "background_shell_spawn_args",
       "list_mcp_resources_exec_args", "read_mcp_resource_exec_args", "mcp_state_exec_args",
-      "subagent_args",
+      "subagent_args", "git_diff_request",
       "pi_read_args", "pi_bash_args", "pi_edit_args", "pi_write_args",
       "pi_grep_args", "pi_find_args", "pi_ls_args",
     ] }],
@@ -1287,6 +1430,7 @@ export function createMessageTypes(): protobuf.Root {
       { id: 41, name: "shell_allowlist_precheck_result", type: "ShellAllowlistPrecheckResult" },
       { id: 42, name: "mcp_allowlist_precheck_result", type: "McpAllowlistPrecheckResult" },
       { id: 43, name: "web_fetch_allowlist_precheck_result", type: "WebFetchAllowlistPrecheckResult" },
+      { id: 44, name: "git_diff_response", type: "GetDiffResponse" },
       { id: 46, name: "pi_read_result", type: "PiReadExecResult" },
       { id: 47, name: "pi_bash_result", type: "PiBashExecResult" },
       { id: 48, name: "pi_edit_result", type: "PiEditExecResult" },
@@ -1294,6 +1438,10 @@ export function createMessageTypes(): protobuf.Root {
       { id: 50, name: "pi_grep_result", type: "PiGrepExecResult" },
       { id: 51, name: "pi_find_result", type: "PiFindExecResult" },
       { id: 52, name: "pi_ls_result", type: "PiLsExecResult" },
+      { id: 53, name: "conversation_search_result", type: "ConversationSearchResult" },
+      { id: 54, name: "agent_store_conflict_result", type: "AgentStoreConflictResult" },
+      { id: 55, name: "mini_swe_agent_bash_result", type: "ShellResult" },
+      { id: 56, name: "adopt_result", type: "AdoptResult" },
     ],
     [{ name: "result", fields: [
       "shell_result", "write_result", "delete_result", "grep_result", "read_result", "ls_result",
@@ -1305,8 +1453,11 @@ export function createMessageTypes(): protobuf.Root {
       "mcp_state_exec_result",
       "subagent_await_result", "smart_mode_classifier_result", "canvas_diagnostics_result",
       "shell_allowlist_precheck_result", "mcp_allowlist_precheck_result", "web_fetch_allowlist_precheck_result",
+      "git_diff_response",
       "pi_read_result", "pi_bash_result", "pi_edit_result", "pi_write_result",
       "pi_grep_result", "pi_find_result", "pi_ls_result",
+      "conversation_search_result", "agent_store_conflict_result",
+      "mini_swe_agent_bash_result", "adopt_result",
     ] }],
   )
 

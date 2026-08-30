@@ -53,6 +53,10 @@ const CLI_EXEC_PAIRS = [
   [49, "pi_grep_args", 50, "pi_grep_result"],
   [50, "pi_find_args", 51, "pi_find_result"],
   [51, "pi_ls_args", 52, "pi_ls_result"],
+  [52, "mini_swe_agent_bash_args", 55, "mini_swe_agent_bash_result"],
+  [53, "conversation_search_args", 53, "conversation_search_result"],
+  [54, "agent_store_conflict_args", 54, "agent_store_conflict_result"],
+  [56, "adopt_args", 56, "adopt_result"],
 ] as const
 
 function rawAgentServerExec(requestField: number): Uint8Array {
@@ -87,11 +91,11 @@ describe("canonical Cursor exec variant map", () => {
   })
 
   it("has unique request ids/names and classifies every canonical variant", () => {
-    expect(new Set(CURSOR_EXEC_VARIANTS.map((variant) => variant.requestField)).size).toBe(37)
-    expect(new Set(CURSOR_EXEC_VARIANTS.map((variant) => variant.requestName)).size).toBe(37)
-    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "opencode-tool")).toHaveLength(16)
-    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "provider-control")).toHaveLength(4)
-    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "unsupported")).toHaveLength(17)
+    expect(new Set(CURSOR_EXEC_VARIANTS.map((variant) => variant.requestField)).size).toBe(41)
+    expect(new Set(CURSOR_EXEC_VARIANTS.map((variant) => variant.requestName)).size).toBe(41)
+    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "opencode-tool")).toHaveLength(17)
+    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "provider-control")).toHaveLength(5)
+    expect(CURSOR_EXEC_VARIANTS.filter((variant) => variant.handling === "unsupported")).toHaveLength(19)
   })
 
   it("keeps OpenCode tool classifications synchronized with executable mappings", () => {
@@ -108,6 +112,17 @@ describe("canonical Cursor exec variant map", () => {
       resultName: "pi_write_result",
     })
     expect(cursorExecVariantByRequestName("pi_write_args")?.requestField).toBe(48)
+  })
+
+  it("looks up the Mini-SWE request/result offset and reclassified variants", () => {
+    expect(cursorExecVariantByRequestField(52)).toMatchObject({
+      requestName: "mini_swe_agent_bash_args",
+      resultField: 55,
+      resultName: "mini_swe_agent_bash_result",
+      handling: "unsupported",
+    })
+    expect(cursorExecVariantByRequestName("git_diff_request")?.handling).toBe("provider-control")
+    expect(cursorExecVariantByRequestName("shell_args")?.handling).toBe("opencode-tool")
   })
 
   it("detects every canonical request id from an independent raw wire frame", () => {
@@ -141,7 +156,6 @@ type DenyWireExpect =
  * failure at #1 instead of #4) fails the test.
  */
 const UNSUPPORTED_DENY_WIRE: readonly DenyWireExpect[] = [
-  { requestName: "shell_args", kind: "result", resultField: 2, innerOneofField: 4 },
   { requestName: "diagnostics_args", kind: "result", resultField: 9, innerOneofField: 2 },
   { requestName: "fetch_args", kind: "result", resultField: 20, innerOneofField: 2 },
   { requestName: "record_screen_args", kind: "result", resultField: 21, innerOneofField: 4 },
@@ -169,7 +183,10 @@ const UNSUPPORTED_DENY_WIRE: readonly DenyWireExpect[] = [
   { requestName: "shell_allowlist_precheck_args", kind: "result", resultField: 41, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
   { requestName: "mcp_allowlist_precheck_args", kind: "result", resultField: 42, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
   { requestName: "web_fetch_allowlist_precheck_args", kind: "result", resultField: 43, innerOneofField: 1, innerVarint: { field: 1, value: 0 } },
-  { requestName: "git_diff_request", kind: "throw" },
+  { requestName: "mini_swe_agent_bash_args", kind: "result", resultField: 55, innerOneofField: 4 },
+  { requestName: "conversation_search_args", kind: "result", resultField: 53, innerOneofField: 1 },
+  { requestName: "agent_store_conflict_args", kind: "result", resultField: 54, innerOneofField: 2 },
+  { requestName: "adopt_args", kind: "result", resultField: 56, innerOneofField: 5 },
 ]
 
 function requireField(bytes: Uint8Array, fn: number, label: string): RawField {

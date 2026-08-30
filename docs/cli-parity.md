@@ -25,7 +25,7 @@ Parity target is interactive `cursor-agent` (`Run` client: TUI and `--print`). `
 |---|---|---|---|
 | read / write / edit / delete / grep / ls | Native | Native + OpenCode permission-aware read/write; edit via catalog-aware remap | ✅ |
 | apply_patch (edit/write substitution) | Native `apply_patch` exists | Synthesizes `apply_patch` envelopes when OpenCode 1.x drops edit/write | 🔶 (parity by design) |
-| shell (streaming, stdin, background, force-background, allowlist precheck) | Native pty | `shell_stream` + `background_shell_spawn` (bash/nohup); stdin / force-background / allowlist precheck unsupported | 🔶 |
+| shell (streaming, stdin, background, force-background, allowlist precheck) | Native pty | `shell_args` + `shell_stream` + `background_shell_spawn` (bash/nohup); stdin / force-background / allowlist precheck unsupported | 🔶 |
 | mcp, list_mcp_resources, read_mcp_resource, mcp_state | Native | MCP exec + provider-control variants | ✅ |
 | subagent, subagent_await | Full SubagentType oneof (computer_use, browser_use, explore, custom, bash, shell, vm_setup_helper, debug, cursor_guide, watch_video, media_review) + permission modes | subagent bridged to OpenCode `task`; subtype set limited to what OpenCode advertises; await unsupported | 🔶 |
 | request_context | Native | provider-control | ✅ |
@@ -36,7 +36,11 @@ Parity target is interactive `cursor-agent` (`Run` client: TUI and `--print`). `
 | execute_hook | Native (interactive `hookExecutor`) | ❌ | ❌ |
 | redacted_read | Worker-only inbound exec #29; registered only when `isSecretRedactionEnabled` (bridge hardcodes `true`; interactive never sets `registerRedactedReadExecutor`) | Soft-deny | ⚪ |
 | smart_mode_classifier | Native (interactive auto-review) | ❌ | ❌ |
-| git_diff_request | Native (always registered) | ❌ | ❌ |
+| git_diff_request | Native (always registered) | provider-control local `git` (`FILE_DIFFS` default; `origin/HEAD` or `origin/<main\|master\|develop>`) | ✅ |
+| mini_swe_agent_bash (#52→#55) | Native Mini-SWE shell (same `ShellArgs` / `ShellResult` as #2, Pi-style result offset) | Soft-deny `rejected` | ❌ |
+| conversation_search | Native local/cloud conversation index | Soft-deny empty `{hits:[]}` | ❌ |
+| agent_store_conflict | Agent-store journal (cloud/worker-shaped) | Soft-deny typed error | ❌ |
+| adopt | Cloud agent adoption | Soft-deny typed error | ❌ |
 | pi_read/bash/edit/write/grep/find/ls (Pi/OMP protocol) | — | ✅ (pi-bridge hosts) | ✅ (provider extra) |
 
 ## Interactions (server-side queries)
@@ -102,6 +106,6 @@ Worker / cloud-bridge only (not a parity target): secret redaction / `redacted_r
 ## Bottom line
 
 - **Core agent protocol:** near-total parity — every message class, checkpoint/KV semantics, token accounting, backpressure, and the interaction machinery are mirrored, many CLI-verbatim.
-- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants and background shell spawn; deliberately unsupported vs interactive CLI: shell stdin/force/allowlist, hooks, diagnostics, git_diff, smart_mode_classifier. Native computer-use / record_screen / redacted_read are worker-only, not gaps.
+- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants, `shell_args`/`shell_stream`, and background shell spawn; `git_diff` is answered locally. Deliberately unsupported vs interactive CLI: shell stdin/force/allowlist, hooks, diagnostics, smart_mode_classifier, mini_swe bash, conversation_search, agent_store_conflict, adopt. Native computer-use / record_screen / redacted_read are worker-only, not gaps.
 - **Interactions:** 3 ✅ bridges (ask_question, switch_mode, generate_image) + CreatePlan 🔶 (host plan file + execution gate); web search/fetch rejected by design and covered by host `custom_websearch` / `custom_webfetch`; setup_vm and replace_env match the interactive CLI (ack / fail). PR / MCP auth / SCM are not interactive CLI capabilities.
-- **Biggest remaining gaps:** diagnostics and git_diff exec, hooks, smart_mode_classifier, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch, PR management, computer use, and screen recording are **not** interactive gaps.
+- **Biggest remaining gaps:** diagnostics exec, hooks, smart_mode_classifier, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch, PR management, computer use, and screen recording are **not** interactive gaps.

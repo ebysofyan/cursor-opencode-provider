@@ -912,6 +912,23 @@ describe("parseExecServerMessage", () => {
     expect(result!.resultField).toBe("shell_stream")
   })
 
+  it("maps shell_args to bash + shell_result, reusing the stream timeout defaults", () => {
+    const result = parseExecServerMessage({
+      id: 12,
+      shell_args: { command: "ls", working_directory: "/tmp" },
+    })
+    expect(result!.toolName).toBe("bash")
+    expect(result!.args).toEqual({ command: "ls", workdir: "/tmp", timeout: 30_000 })
+    expect(result!.resultField).toBe("shell_result")
+    expect(result!.resultMetadata).toMatchObject({
+      shell_stream: true,
+      command: "ls",
+      working_directory: "/tmp",
+      timeout_ms: 30_000,
+      timeout_behavior: 0,
+    })
+  })
+
   it("preserves Cursor shell timeout policy and applies native zero defaults", () => {
     const foreground = parseExecServerMessage({
       id: 5,
@@ -1230,6 +1247,54 @@ describe("buildExecClientMessages", () => {
     expect(mid.shell_stream?.stdout?.data).toBe("stdout output")
     expect(end.shell_stream?.exit?.code).toBe(0)
     expect(close.exec_client_control_message?.stream_close?.id).toBe(3)
+  })
+
+  it("encodes shell_result success/timeout/failure for exec #2", () => {
+    const success = buildExecClientMessages({
+      execId: 2,
+      resultField: "shell_result",
+      output: "ok\n",
+      resultMetadata: { command: "echo ok", working_directory: "/tmp" },
+      shellOutcome: { kind: "exit", code: 0 },
+    })
+    expect(success).toHaveLength(2)
+    const ok = decodeMessage<any>("AgentClientMessage", success[0]).exec_client_message
+    expect(ok.shell_result.success).toMatchObject({
+      command: "echo ok",
+      working_directory: "/tmp",
+      exit_code: 0,
+      stdout: "ok\n",
+    })
+    expect(ok.shell_result.rejected).toBeUndefined()
+
+    const timedOut = buildExecClientMessages({
+      execId: 2,
+      resultField: "shell_result",
+      output: "partial\n",
+      resultMetadata: { command: "sleep 60", working_directory: "/tmp" },
+      shellOutcome: { kind: "timeout", timeoutMs: 30_000 },
+    })
+    const timeout = decodeMessage<any>("AgentClientMessage", timedOut[0]).exec_client_message
+    expect(timeout.shell_result.timeout).toEqual({
+      command: "sleep 60",
+      working_directory: "/tmp",
+      timeout_ms: 30_000,
+    })
+
+    const failed = buildExecClientMessages({
+      execId: 2,
+      resultField: "shell_result",
+      output: "",
+      error: "permission denied",
+      resultMetadata: { command: "rm /etc/passwd", working_directory: "/tmp" },
+    })
+    const failure = decodeMessage<any>("AgentClientMessage", failed[0]).exec_client_message
+    expect(failure.shell_result.failure).toMatchObject({
+      command: "rm /etc/passwd",
+      stderr: "permission denied",
+      exit_code: 1,
+      aborted: false,
+    })
   })
 
   it("encodes Cursor-native shell timeout, background, and nonzero-exit states", () => {
