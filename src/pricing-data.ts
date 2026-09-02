@@ -15,6 +15,12 @@ export const CURSOR_MODEL_COSTS = {
     "cache_read": 1,
     "cache_write": 12.5
   },
+  "claude-fable-5-1": {
+    "input": 10,
+    "output": 50,
+    "cache_read": 0.25,
+    "cache_write": 12.5
+  },
   "claude-haiku-4-5": {
     "input": 1,
     "output": 5,
@@ -237,6 +243,10 @@ export const CURSOR_MODEL_CONTEXTS = {
     "maxContext": 300000,
     "maxContextForMaxMode": 1000000
   },
+  "claude-fable-5-1": {
+    "maxContext": 300000,
+    "maxContextForMaxMode": 1000000
+  },
   "claude-haiku-4-5": {
     "maxContext": 200000
   },
@@ -359,6 +369,9 @@ export const CURSOR_MODEL_CONTEXTS = {
 
 export const CURSOR_MODEL_CAPABILITIES = {
   "claude-fable-5": {
+    "supportsImages": true
+  },
+  "claude-fable-5-1": {
     "supportsImages": true
   },
   "claude-haiku-4-5": {

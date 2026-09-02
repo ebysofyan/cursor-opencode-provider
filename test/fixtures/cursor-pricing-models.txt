@@ -9,6 +9,7 @@ grok-4.5-fast
 grok-4.6
 grok-4.6-fast
 claude-fable-5
+claude-fable-5-1
 claude-haiku-4-5
 claude-opus-4-5
 claude-opus-4-6

@@ -29,15 +29,15 @@ Parity target is interactive `cursor-agent` (`Run` client: TUI and `--print`). `
 | mcp, list_mcp_resources, read_mcp_resource, mcp_state | Native | MCP exec + provider-control variants | ✅ |
 | subagent, subagent_await | Full SubagentType oneof (computer_use, browser_use, explore, custom, bash, shell, vm_setup_helper, debug, cursor_guide, watch_video, media_review) + permission modes | subagent bridged to OpenCode `task`; subtype set limited to what OpenCode advertises; await unsupported | 🔶 |
 | request_context | Native | provider-control | ✅ |
-| diagnostics | Native (codebase-ref / LSP; stub empty list if `--disable-codebase-ref`) | ❌ | ❌ |
+| diagnostics | Native `read_lints` via codebase-ref / LSP (`DiagnosticsArgs.path`; empty list if `--disable-codebase-ref`) | Soft-deny error. OpenCode already appends LSP errors on write/edit/apply_patch (those remaps already carry them). Dedicated pull `#9` is **not planned**: the public host surface is `GET /lsp` status and the `lsp` **navigation** tool, not a diagnostics fetch. Do not remap `#9` onto `lsp`, spawn language servers, or change OpenCode. | ⚪ |
 | canvas_diagnostics | Worker exec-daemon only (`getCanvasDiagnostics`); interactive `createLocalResourceProvider` never registers it | — | ⚪ |
 | fetch / web_fetch | Native exec + UI | Native exec unsupported; capability via host `custom_webfetch` / `webfetch` (see Interactions) | 🔶 (parity by design) |
 | record_screen, computer_use | Native X11 executor is worker-only (`setupDaemon` `--computer-use` / `enableRecordScreen`). Interactive: `--computer-use-coords` (coords only), Darwin harness stub throws, Mac bundled `computer-use` MCP — not exec #21/#22 | — | ⚪ |
 | execute_hook | Native (interactive `hookExecutor`) | ❌ | ❌ |
 | redacted_read | Worker-only inbound exec #29; registered only when `isSecretRedactionEnabled` (bridge hardcodes `true`; interactive never sets `registerRedactedReadExecutor`) | Soft-deny | ⚪ |
-| smart_mode_classifier | Native (interactive auto-review) | ❌ | ❌ |
+| smart_mode_classifier | Native `--auto-review` (Smart Auto): client classifier ALLOW/BLOCK | Soft-deny error; OpenCode has no Auto-review mode — not planned | ⚪ |
 | git_diff_request | Native (always registered) | provider-control local `git` (`FILE_DIFFS` default; `origin/HEAD` or `origin/<main\|master\|develop>`) | ✅ |
-| mini_swe_agent_bash (#52→#55) | Native Mini-SWE shell (same `ShellArgs` / `ShellResult` as #2, Pi-style result offset) | Soft-deny `rejected` | ❌ |
+| mini_swe_agent_bash (#52→#55) | Native Mini-SWE shell (same `ShellArgs` / `ShellResult` as #2, Pi-style result offset) | Soft-deny `rejected`; Mini-SWE / SWE-agent bash is not planned | ⚪ |
 | conversation_search | Native local/cloud conversation index | Soft-deny empty `{hits:[]}` | ❌ |
 | agent_store_conflict | Agent-store journal (cloud/worker-shaped) | Soft-deny typed error | ❌ |
 | adopt | Cloud agent adoption | Soft-deny typed error | ❌ |
@@ -103,9 +103,15 @@ These have no provider equivalent by design — the provider is a *host language
 
 Worker / cloud-bridge only (not a parity target): secret redaction / `redacted_read`, X11 computer-use and record-screen executors, `replace_env` as a working VM swap, PR management, `readOnlyBareMode`, `--pool` / `ClaimWorker`, mounted agent-store claim.
 
+Not planned (OpenCode has no equivalent mode): `smart_mode_classifier` / Cursor `--auto-review`. The host keeps OpenCode allow/ask/deny as the permission gate; inbound `#38` stays a typed soft-deny. Do not implement ALLOW/BLOCK classification.
+
+Not planned (same Mini-SWE / SWE-agent surface): `mini_swe_agent_bash` (`#52`→`#55`). Inbound stays a typed `rejected` soft-deny. Do not remap it onto OpenCode `bash`.
+
+Not planned (no presented pull capability): `diagnostics` / Cursor `read_lints` (`#9`). OpenCode LSP feedback already rides write/edit/apply_patch tool output, which this provider remaps. Public plugin/SDK surface is `GET /lsp` **status** and the `lsp` tool (definition/hover/symbols only). We do not add OpenCode APIs, call host-internal `lsp.diagnostics()`, shell out to `opencode debug lsp`, spawn our own language servers, remap `#9` onto `lsp`, or return an empty success list (that would claim the file is clean). Inbound `#9` stays a typed error deny.
+
 ## Bottom line
 
 - **Core agent protocol:** near-total parity — every message class, checkpoint/KV semantics, token accounting, backpressure, and the interaction machinery are mirrored, many CLI-verbatim.
-- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants, `shell_args`/`shell_stream`, and background shell spawn; `git_diff` is answered locally. Deliberately unsupported vs interactive CLI: shell stdin/force/allowlist, hooks, diagnostics, smart_mode_classifier, mini_swe bash, conversation_search, agent_store_conflict, adopt. Native computer-use / record_screen / redacted_read are worker-only, not gaps.
+- **Tools:** the full read/write/edit/grep/ls/mcp/subagent family plus Pi variants, `shell_args`/`shell_stream`, and background shell spawn; `git_diff` is answered locally. Deliberately unsupported vs interactive CLI: shell stdin/force/allowlist, hooks, conversation_search, agent_store_conflict, adopt. Native computer-use / record_screen / redacted_read are worker-only, not gaps. `smart_mode_classifier`, `mini_swe_agent_bash`, and dedicated `diagnostics` / `read_lints` are **not planned** (LSP errors still arrive via write/edit/apply_patch output).
 - **Interactions:** 3 ✅ bridges (ask_question, switch_mode, generate_image) + CreatePlan 🔶 (host plan file + execution gate); web search/fetch rejected by design and covered by host `custom_websearch` / `custom_webfetch`; setup_vm and replace_env match the interactive CLI (ack / fail). PR / MCP auth / SCM are not interactive CLI capabilities.
-- **Biggest remaining gaps:** diagnostics exec, hooks, smart_mode_classifier, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch, PR management, computer use, and screen recording are **not** interactive gaps.
+- **Biggest remaining gaps:** hooks, full ConversationAction surface (background jobs, goal continuation, inject_context, shell_command), await/force-background shell continuity, and everything UI-shaped (TUI, notifications, sudo, worktrees, sandbox). Web search/fetch, PR management, computer use, screen recording, Auto-review / `smart_mode_classifier`, Mini-SWE bash, and dedicated diagnostics pull are **not** interactive gaps.

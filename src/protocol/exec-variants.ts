@@ -27,6 +27,8 @@ export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
   { requestField: 5, requestName: "grep_args", resultField: 5, resultName: "grep_result", handling: "opencode-tool" },
   { requestField: 7, requestName: "read_args", resultField: 7, resultName: "read_result", handling: "opencode-tool" },
   { requestField: 8, requestName: "ls_args", resultField: 8, resultName: "ls_result", handling: "opencode-tool" },
+  // Dedicated Cursor read_lints (#9) is not planned. OpenCode only presents
+  // LSP errors on write/edit/apply_patch output plus GET /lsp status / navigation.
   { requestField: 9, requestName: "diagnostics_args", resultField: 9, resultName: "diagnostics_result", handling: "unsupported" },
   { requestField: 10, requestName: "request_context_args", resultField: 10, resultName: "request_context_result", handling: "provider-control" },
   { requestField: 11, requestName: "mcp_args", resultField: 11, resultName: "mcp_result", handling: "opencode-tool" },
@@ -45,6 +47,7 @@ export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
   { requestField: 31, requestName: "force_background_subagent_args", resultField: 31, resultName: "force_background_subagent_result", handling: "unsupported" },
   { requestField: 36, requestName: "mcp_state_exec_args", resultField: 36, resultName: "mcp_state_exec_result", handling: "provider-control" },
   { requestField: 37, requestName: "subagent_await_args", resultField: 37, resultName: "subagent_await_result", handling: "unsupported" },
+  // OpenCode has no Auto-review / `--auto-review` mode. Not planned: keep the typed soft-deny.
   { requestField: 38, requestName: "smart_mode_classifier_args", resultField: 38, resultName: "smart_mode_classifier_result", handling: "unsupported" },
   { requestField: 40, requestName: "canvas_diagnostics_args", resultField: 40, resultName: "canvas_diagnostics_result", handling: "unsupported" },
   { requestField: 41, requestName: "shell_allowlist_precheck_args", resultField: 41, resultName: "shell_allowlist_precheck_result", handling: "unsupported" },
@@ -60,6 +63,7 @@ export const CURSOR_EXEC_VARIANTS: readonly CursorExecVariant[] = [
   { requestField: 51, requestName: "pi_ls_args", resultField: 52, resultName: "pi_ls_result", handling: "opencode-tool" },
   // Mini-SWE request #52 pairs with ShellResult at #55 (Pi-style offset; #55
   // request is accept_hook_additional_contexts, not a variant).
+  // Mini-SWE / SWE-agent bash is not planned (same surface as Auto-review). Keep the typed soft-deny.
   { requestField: 52, requestName: "mini_swe_agent_bash_args", resultField: 55, resultName: "mini_swe_agent_bash_result", handling: "unsupported" },
   { requestField: 53, requestName: "conversation_search_args", resultField: 53, resultName: "conversation_search_result", handling: "unsupported" },
   { requestField: 54, requestName: "agent_store_conflict_args", resultField: 54, resultName: "agent_store_conflict_result", handling: "unsupported" },
