@@ -127,6 +127,11 @@ export const CURSOR_MODEL_COSTS = {
     "output": 3.5,
     "cache_read": 0.075
   },
+  "gemini-3.8-flash": {
+    "input": 0.75,
+    "output": 3.5,
+    "cache_read": 0.075
+  },
   "glm-5.2": {
     "input": 1.4,
     "output": 4.4,
@@ -186,7 +191,13 @@ export const CURSOR_MODEL_COSTS = {
     "input": 0.2,
     "output": 1.2,
     "cache_read": 0.02,
-    "cache_write": 0.25
+    "cache_write": 0.25,
+    "context_over_200k": {
+      "input": 0.4,
+      "output": 1.2,
+      "cache_read": 0.04,
+      "cache_write": 0.5
+    }
   },
   "gpt-5.6-sol": {
     "input": 4,
@@ -204,7 +215,13 @@ export const CURSOR_MODEL_COSTS = {
     "input": 2,
     "output": 12,
     "cache_read": 0.2,
-    "cache_write": 2.5
+    "cache_write": 2.5,
+    "context_over_200k": {
+      "input": 4,
+      "output": 12,
+      "cache_read": 0.4,
+      "cache_write": 5
+    }
   },
   "grok-4.5": {
     "input": 2,
@@ -235,6 +252,11 @@ export const CURSOR_MODEL_COSTS = {
     "input": 3,
     "output": 15,
     "cache_read": 0.3
+  },
+  "muse-spark-1.3": {
+    "input": 1.25,
+    "output": 4.25,
+    "cache_read": 0.15
   }
 } as const
 
@@ -313,6 +335,10 @@ export const CURSOR_MODEL_CONTEXTS = {
     "maxContext": 200000,
     "maxContextForMaxMode": 1000000
   },
+  "gemini-3.8-flash": {
+    "maxContext": 200000,
+    "maxContextForMaxMode": 1000000
+  },
   "glm-5.2": {
     "maxContext": 200000
   },
@@ -343,14 +369,16 @@ export const CURSOR_MODEL_CONTEXTS = {
     "maxContextForMaxMode": 1000000
   },
   "gpt-5.6-luna": {
-    "maxContext": 272000
+    "maxContext": 272000,
+    "maxContextForMaxMode": 1000000
   },
   "gpt-5.6-sol": {
     "maxContext": 272000,
     "maxContextForMaxMode": 1000000
   },
   "gpt-5.6-terra": {
-    "maxContext": 272000
+    "maxContext": 272000,
+    "maxContextForMaxMode": 1000000
   },
   "grok-4.5": {
     "maxContext": 256000
@@ -363,6 +391,10 @@ export const CURSOR_MODEL_CONTEXTS = {
   },
   "kimi-k3": {
     "maxContext": 200000,
+    "maxContextForMaxMode": 1000000
+  },
+  "muse-spark-1.3": {
+    "maxContext": 300000,
     "maxContextForMaxMode": 1000000
   }
 } as const
@@ -425,6 +457,9 @@ export const CURSOR_MODEL_CAPABILITIES = {
   "gemini-3.7-flash": {
     "supportsImages": true
   },
+  "gemini-3.8-flash": {
+    "supportsImages": true
+  },
   "glm-5.2": {
     "supportsImages": false
   },
@@ -471,6 +506,9 @@ export const CURSOR_MODEL_CAPABILITIES = {
     "supportsImages": true
   },
   "kimi-k3": {
+    "supportsImages": true
+  },
+  "muse-spark-1.3": {
     "supportsImages": true
   }
 } as const

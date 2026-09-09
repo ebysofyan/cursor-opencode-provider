@@ -73,6 +73,7 @@ const DISPLAY_NAME_TO_MODEL_ID: Record<string, string> = {
   "Gemini 3.5 Flash": "gemini-3.5-flash",
   "Gemini 3.6 Flash": "gemini-3.6-flash",
   "Gemini 3.7 Flash": "gemini-3.7-flash",
+  "Gemini 3.8 Flash": "gemini-3.8-flash",
   "GLM 5.2": "glm-5.2",
   "GPT-5 Mini": "gpt-5-mini",
   // Cursor lists Codex-branded GPT-5.1 rows; our AvailableModels id is gpt-5.1.
@@ -90,6 +91,7 @@ const DISPLAY_NAME_TO_MODEL_ID: Record<string, string> = {
   "Grok 4.6": "grok-4.6",
   "Kimi K2.7 Code": "kimi-k2.7-code",
   "Kimi K3": "kimi-k3",
+  "Muse Spark 1.3": "muse-spark-1.3",
 }
 
 /** Rows we intentionally ignore (variant-only pricing, unused models, duplicates). */
