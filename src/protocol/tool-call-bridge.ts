@@ -74,11 +74,13 @@ const TOOL_CALL_VARIANTS = Object.keys(VARIANT_TO_OPENCODE)
 
 // ToolCallCompleted is a notification, not an execution request. Only mirror
 // client-visible state whose authoritative final value is already present in
-// the completed payload. Data-returning, interactive, and side-effecting calls
+// the completed payload (or reconstructable from a prior mirrored snapshot for
+// Cursor todo merges). Data-returning, interactive, and side-effecting calls
 // must use an exec/interaction request channel where Cursor can receive their
 // actual result.
 const DISPLAY_STATE_MIRROR_VARIANTS = new Set([
   "update_todos_tool_call",
+  "read_todos_tool_call",
   "create_plan_tool_call",
 ])
 
@@ -125,6 +127,164 @@ function mapTodos(raw: unknown): Array<Record<string, unknown>> {
   })
 }
 
+/**
+ * Normalize a full todo snapshot for `mirroredTodos` storage. Returns
+ * undefined when the input is not a todo array (nothing to learn). Drops the
+ * synthetic "plan" id minted for create_plan mirrors so later merges never
+ * resurrect it.
+ */
+export function snapshotMirroredTodos(
+  todos: unknown,
+): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(todos)) return undefined
+  return mapTodos(todos).filter((t) => {
+    const id = typeof t.id === "string" ? t.id : ""
+    return id.length > 0 && id !== "plan"
+  })
+}
+
+/**
+ * Refresh the mirrored snapshot from a host `todoread` tool result. The host
+ * list is authoritative; returns undefined when the output is not recognizable
+ * todo JSON (prose, caps, errors) so a stale-but-useful snapshot survives.
+ */
+export function snapshotMirroredTodosFromReadOutput(
+  output: string,
+): Array<Record<string, unknown>> | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(output)
+  } catch {
+    return undefined
+  }
+  const list = Array.isArray(parsed) ? parsed : (asRecord(parsed)?.todos ?? undefined)
+  if (!Array.isArray(list)) return undefined
+  return snapshotMirroredTodos(list)
+}
+
+/**
+ * Overlay Cursor merge patches onto a previously mirrored full todo list.
+ * Preserves prior order; appends newly introduced ids in patch order.
+ *
+ * Matching is by id first, then by exact (trimmed) content. The content
+ * fallback covers mixed flows where the prior snapshot came from a direct
+ * host `todowrite` (positional ids) while the patch references Cursor-side
+ * ids for the same tasks. Patch items with neither an id/content match nor
+ * their own content are skipped — a status-only update for an unknown item
+ * cannot be mapped onto the host list.
+ */
+export function applyTodoMerge(
+  prior: ReadonlyArray<Record<string, unknown>>,
+  patch: unknown,
+): Array<Record<string, unknown>> {
+  const rawPatch = Array.isArray(patch) ? patch : []
+  const mappedPatch = mapTodos(patch)
+  const byId = new Map<string, Record<string, unknown>>()
+  const byContent = new Map<string, Record<string, unknown>>()
+  // Patch ids already folded into a prior record via content match: never
+  // re-emit them as new items in the output phase.
+  const consumedPatchIds = new Set<string>()
+  // Patch ids accepted as genuinely new content: the only patch ids the
+  // output phase may append. Orphans skipped above (unknown id, no content)
+  // must not leak back in here.
+  const appendedPatchIds = new Set<string>()
+  for (const item of prior) {
+    const id = typeof item.id === "string" && item.id.length > 0 ? item.id : ""
+    if (!id) continue
+    const normalized = {
+      id,
+      content: typeof item.content === "string" ? item.content : "",
+      status: typeof item.status === "string" ? item.status : mapTodoStatus(item.status),
+      priority:
+        typeof item.priority === "string" && item.priority ? item.priority : "medium",
+    }
+    byId.set(id, normalized)
+    const key = normalized.content.trim()
+    if (key && !byContent.has(key)) byContent.set(key, normalized)
+  }
+  const overlay = (
+    target: Record<string, unknown>,
+    item: Record<string, unknown>,
+    raw: Record<string, unknown>,
+  ): Record<string, unknown> => {
+    // Only overwrite fields the patch actually carries. mapTodos fills
+    // defaults ("" content, "pending" status, "medium" priority) that must not
+    // clobber a prior item when Cursor sends an id+status-only patch.
+    const next: Record<string, unknown> = { ...target, id: target.id }
+    if (typeof raw.content === "string" && raw.content.length > 0) {
+      next.content = raw.content
+    }
+    if (raw.status !== undefined && raw.status !== null) {
+      next.status = String(item.status)
+    }
+    if (typeof raw.priority === "string" && raw.priority) {
+      next.priority = raw.priority
+    }
+    return next
+  }
+  for (let index = 0; index < mappedPatch.length; index++) {
+    const item = mappedPatch[index]!
+    const raw = asRecord(rawPatch[index]) ?? {}
+    const id = String(item.id)
+    const byIdMatch = byId.get(id)
+    if (byIdMatch) {
+      const merged = overlay(byIdMatch, item, raw)
+      byId.set(id, merged)
+      // Keep the content index pointing at the fresh record so later
+      // content-fallback matches never merge onto a stale copy.
+      const oldKey =
+        typeof byIdMatch.content === "string" ? byIdMatch.content.trim() : ""
+      const newKey =
+        typeof merged.content === "string" ? (merged.content as string).trim() : ""
+      if (oldKey && byContent.get(oldKey) === byIdMatch) byContent.delete(oldKey)
+      if (newKey && !byContent.has(newKey)) byContent.set(newKey, merged)
+      continue
+    }
+    const contentKey =
+      typeof raw.content === "string" && raw.content.trim().length > 0
+        ? raw.content.trim()
+        : ""
+    const byContentMatch = contentKey ? byContent.get(contentKey) : undefined
+    if (byContentMatch) {
+      // Same task, different id space (host positional ids vs Cursor ids).
+      // Keep the prior id so snapshot identity stays stable and order is
+      // preserved; adopt the patch's status/priority/content.
+      const merged = overlay(byContentMatch, item, raw)
+      byId.set(String(byContentMatch.id), merged)
+      if (contentKey) byContent.set(contentKey, merged)
+      consumedPatchIds.add(id)
+      continue
+    }
+    if (!contentKey) continue
+    byId.set(id, item)
+    byContent.set(contentKey, item)
+    appendedPatchIds.add(id)
+  }
+  const out: Array<Record<string, unknown>> = []
+  const seen = new Set<string>()
+  for (const item of prior) {
+    const id = typeof item.id === "string" ? item.id : ""
+    if (!id || seen.has(id)) continue
+    const next = byId.get(id)
+    if (next) {
+      out.push(next)
+      seen.add(id)
+    }
+  }
+  for (const item of mappedPatch) {
+    const id = String(item.id)
+    // Id-matched items are already emitted under the prior id; content-matched
+    // items were folded into the prior record (not appended under the foreign
+    // patch id); orphans were skipped outright. Only genuinely new content
+    // reaches the host list.
+    if (seen.has(id) || consumedPatchIds.has(id)) continue
+    if (!appendedPatchIds.has(id)) continue
+    out.push(item)
+    seen.add(id)
+  }
+  return out
+}
+
 function unwrapArgs(variantPayload: Record<string, unknown>): Record<string, unknown> {
   const nested = asRecord(variantPayload.args)
   return nested ?? variantPayload
@@ -132,10 +292,14 @@ function unwrapArgs(variantPayload: Record<string, unknown>): Record<string, unk
 
 /**
  * Decode a Cursor ToolCall oneof into a display tool call we can bridge.
+ *
+ * @param priorMirroredTodos Last full todo snapshot mirrored this Run; used to
+ *   expand Cursor `merge: true` updates that omit ToolCallCompleted.success.todos.
  */
 export function parseDisplayToolCall(
   callId: string,
   toolCall: Record<string, unknown> | undefined,
+  priorMirroredTodos?: ReadonlyArray<Record<string, unknown>>,
 ): DisplayToolCall | undefined {
   if (!toolCall || !callId) return undefined
   const variant = findToolVariant(toolCall)
@@ -168,10 +332,17 @@ export function parseDisplayToolCall(
     const success = asRecord(result?.success)
     const completedTodos = Array.isArray(success?.todos) ? success.todos : undefined
     const isMerge = variant === "update_todos_tool_call" && args.merge === true
-    // OpenCode todowrite replaces the whole list. For Cursor merge updates,
-    // only bridge when ToolCallCompleted includes the final merged list.
+    // OpenCode todowrite replaces the whole list. Prefer the completed payload;
+    // otherwise a non-merge args list; otherwise merge against the Run snapshot.
     const sourceTodos = completedTodos ?? (!isMerge ? args.todos : undefined)
-    const todos = mapTodos(sourceTodos)
+    const canMergeFromPrior =
+      sourceTodos === undefined &&
+      isMerge &&
+      Array.isArray(priorMirroredTodos) &&
+      priorMirroredTodos.length > 0
+    const todos = canMergeFromPrior
+      ? applyTodoMerge(priorMirroredTodos!, args.todos)
+      : mapTodos(sourceTodos)
     if (variant === "create_plan_tool_call") {
       const overview = typeof args.overview === "string" ? args.overview.trim() : ""
       const plan = typeof args.plan === "string" ? args.plan.trim() : ""
@@ -190,7 +361,23 @@ export function parseDisplayToolCall(
       variant,
       preferredToolName: "todowrite",
       args: { todos },
-      bridgeable: variant === "create_plan_tool_call" ? todos.length > 0 : Array.isArray(sourceTodos),
+      bridgeable:
+        variant === "create_plan_tool_call"
+          ? todos.length > 0
+          : Array.isArray(sourceTodos) || canMergeFromPrior,
+    }
+  }
+
+  // Cursor TodoRead is the same display-only channel as TodoWrite (agent.v1
+  // read_todos_tool_call). OpenCode todoread takes an empty body; host filters
+  // are not part of the canonical schema, so drop status_filter / id_filter.
+  if (variant === "read_todos_tool_call") {
+    return {
+      callId,
+      variant,
+      preferredToolName: "todoread",
+      args: {},
+      bridgeable: true,
     }
   }
 
@@ -336,6 +523,9 @@ export function resolveBridgedOpenCodeToolCall(
       mapped.args = {
         todos: mapTodos((display.args as { todos?: unknown }).todos ?? mapped.args.todos),
       }
+    }
+    if (toolName === "todoread") {
+      mapped.args = {}
     }
     return {
       toolName: mapped.toolName,

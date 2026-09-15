@@ -22,9 +22,14 @@ describe("buildOpenCodeInteractionGuidance", () => {
     const guidance = buildOpenCodeInteractionGuidance([
       { name: "question" },
       { name: "todowrite" },
+      { name: "todoread" },
     ], false, "/workspace/project")
     expect(guidance).toContain("OpenCode `question` tool")
-    expect(guidance).toContain("OpenCode `todowrite` tool")
+    expect(guidance).toContain("OpenCode `todowrite` / `todoread`")
+    expect(guidance).toContain("do not use Cursor TodoWrite")
+    expect(guidance).toContain("do not narrate Cursor-vs-OpenCode todo-tool differences")
+    expect(guidance).not.toContain("opencode-todowrite")
+    expect(guidance).not.toContain("TodoRead is missing")
     expect(guidance).toContain("Cursor-native CreatePlan is accepted as a Cursor interaction")
     expect(guidance).toContain("Do not narrate that CreatePlan is missing")
     expect(guidance).toContain("Emit the actual tool call")
@@ -53,6 +58,18 @@ describe("buildOpenCodeInteractionGuidance", () => {
     expect(guidance).not.toContain("OpenCode `question` tool")
   })
 
+  it("prefers OpenCode todos even when plan_enter is also advertised", () => {
+    const guidance = buildOpenCodeInteractionGuidance([
+      { name: "plan_enter" },
+      { name: "todowrite" },
+      { name: "todoread" },
+    ], false, "/workspace/project")
+    expect(guidance).toContain("OpenCode `plan_enter` tool")
+    expect(guidance).toContain("OpenCode `todowrite` / `todoread`")
+    expect(guidance).toContain("do not use Cursor TodoWrite")
+    expect(guidance).toContain("do not narrate Cursor-vs-OpenCode todo-tool differences")
+  })
+
   it("does not alter compaction and clarifies bridged interactions are not MCP tools", () => {
     expect(buildOpenCodeInteractionGuidance([
       { name: "question" },
@@ -62,6 +79,7 @@ describe("buildOpenCodeInteractionGuidance", () => {
       { name: "read" },
     ], false, "/workspace/project")
     expect(guidance).toContain("exactly these executable tools for this turn: `bash`, `read`")
+    expect(guidance).toContain("Call only tools in that exact OpenCode list")
     expect(guidance).toContain("not an OpenCode or MCP catalog tool")
     expect(guidance).toContain("do not narrate that they are missing")
     expect(guidance).toContain("without claiming a missing MCP tool")

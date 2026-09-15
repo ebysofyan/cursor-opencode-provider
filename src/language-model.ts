@@ -58,6 +58,8 @@ import {
   listProtobufFieldNumbers,
   parseDisplayToolCall,
   resolveBridgedOpenCodeToolCall,
+  snapshotMirroredTodos,
+  snapshotMirroredTodosFromReadOutput,
 } from "./protocol/tool-call-bridge.js"
 import { handleKvServerMessage } from "./protocol/kv.js"
 import {
@@ -497,6 +499,55 @@ function snapshotToolCatalog(sessionKey: string | undefined): OpencodeToolDef[] 
   return structuredClone(toolCatalogBySession.get(sessionKey) ?? [])
 }
 
+// Last known full host todo list per OpenCode session. Run-local
+// `session.mirroredTodos` dies with the Run (turn_ended closes the session),
+// but merges in later turns still need a base — same shape of problem as the
+// tool catalog above, same solution. In-memory only: never enters the prompt,
+// RequestContext, or persisted restart state, so the cache prefix is untouched.
+// Refreshed on every todo write/read we observe; replaced wholesale, never
+// merged, so it tracks host truth instead of accumulating guesses.
+const mirroredTodosBySession = new Map<string, Array<Record<string, unknown>>>()
+
+/** Record the authoritative host todo list for an OpenCode session. */
+export function rememberMirroredTodos(
+  sessionKey: string | undefined,
+  todos: ReadonlyArray<Record<string, unknown>>,
+): void {
+  if (!sessionKey) return
+  mirroredTodosBySession.delete(sessionKey)
+  mirroredTodosBySession.set(
+    sessionKey,
+    todos.map((t) => ({ ...t })),
+  )
+  while (mirroredTodosBySession.size > MAX_TURN_STATE_SESSIONS) {
+    const oldest = mirroredTodosBySession.keys().next().value as string | undefined
+    if (!oldest) break
+    mirroredTodosBySession.delete(oldest)
+  }
+}
+
+/** Copy of the last known host todo list for an OpenCode session, if any. */
+export function snapshotMirroredTodosBySession(
+  sessionKey: string | undefined,
+): Array<Record<string, unknown>> | undefined {
+  if (!sessionKey) return undefined
+  const todos = mirroredTodosBySession.get(sessionKey)
+  return todos ? todos.map((t) => ({ ...t })) : undefined
+}
+
+/**
+ * Store a bridged/observed full todo snapshot on both the live Run session
+ * (for merges later this turn) and the per-OpenCode-session copy (for merges
+ * in later turns and across checkpoint resumes).
+ */
+function storeMirroredTodos(
+  session: CursorSession,
+  todos: ReadonlyArray<Record<string, unknown>>,
+): void {
+  session.mirroredTodos = todos.map((t) => ({ ...t }))
+  rememberMirroredTodos(session.openCodeSessionId, session.mirroredTodos)
+}
+
 function rememberPostCompactionRebase(sessionKey: string): void {
   postCompactionRebaseBySession.delete(sessionKey)
   postCompactionRebaseBySession.add(sessionKey)
@@ -774,6 +825,8 @@ export async function pumpWithRecovery(input: {
       if (recovery.kind === "resume") {
         session.usageEstimate = { ...pumpedSession.usageEstimate }
         session.editToolCalls = new Map(pumpedSession.editToolCalls)
+        // mirroredTodos rides along via rememberMirroredTodos (per-OpenCode-
+        // session, seeded in startSession) — no handoff needed here.
       }
       input.onSession?.(session)
     } finally {
@@ -1218,6 +1271,10 @@ async function startSession(
     pending: new Map(),
     displayToolCalls: new Map(),
     editToolCalls: new Map(),
+    // Seed from the per-OpenCode-session copy: merges in this turn (and after
+    // checkpoint resumes/rebases, which rebuild the session here) expand
+    // against the last observed host list, not an empty one.
+    mirroredTodos: snapshotMirroredTodosBySession(lifecycle ? undefined : sessionKey),
     nextBridgedExecId: 900_000,
     blobs: new Map(),
     toolDescriptors,
@@ -1642,6 +1699,16 @@ export function deliverContinuationResults(
       trace(`continuation: delivery stopped execId=${r.execId} reason=${outcome.reason}`)
       if (outcome.kind === "duplicate") continue
       return undefined
+    }
+    // A host `todoread` result is the authoritative list. Refresh the mirrored
+    // snapshot (direct reads and bridged native reads alike) so later merges
+    // apply onto host truth, not a stale write.
+    if (pending.toolName === "todoread" && r.error === undefined) {
+      const snapshot = snapshotMirroredTodosFromReadOutput(r.output)
+      if (snapshot !== undefined) {
+        storeMirroredTodos(session, snapshot)
+        trace(`continuation: mirrored todoread snapshot items=${snapshot.length}`)
+      }
     }
     session.usageEstimate.inputTokens += estimateTokens(r.output.length)
     if (pending.bridged) {
@@ -2490,7 +2557,7 @@ export async function pump(
         if (!session.allowTools) {
           trace(`display tool_call_completed: SKIPPED (allowTools=false) callId=${callId}`)
         } else {
-          const display = parseDisplayToolCall(callId, toolCall)
+          const display = parseDisplayToolCall(callId, toolCall, session.mirroredTodos)
           const advertised = advertisedToolNamesFromDescriptors(session.toolDescriptors)
           const bridged = display
             ? resolveBridgedOpenCodeToolCall(display, advertised)
@@ -2513,6 +2580,12 @@ export async function pump(
                 `advertised=[${advertised.join(",")}]`,
             )
           } else {
+            // Snapshot only Cursor todo writes (not create_plan's synthetic
+            // "plan" prepend) so later merge patches apply onto a real list.
+            if (bridged.toolName === "todowrite" && bridged.variant === "update_todos_tool_call") {
+              const snapshot = snapshotMirroredTodos(bridged.args.todos)
+              if (snapshot !== undefined) storeMirroredTodos(session, snapshot)
+            }
             const execId = session.nextBridgedExecId++
             sessionManager.registerPending(
               execId,
@@ -2814,6 +2887,16 @@ export async function pump(
             false,
             parsed.resultMetadata,
           )
+          // A direct host `todowrite` is a replace-all snapshot: it is the new
+          // truth for later Cursor merge patches, which otherwise apply onto a
+          // stale (or empty) mirrored list.
+          if (parsed.toolName === "todowrite") {
+            const snapshot = snapshotMirroredTodos(parsed.args.todos)
+            if (snapshot !== undefined) {
+              storeMirroredTodos(session, snapshot)
+              trace(`exec: mirrored todowrite snapshot items=${snapshot.length}`)
+            }
+          }
           // tc.input is already a JSON string (LanguageModelV3ToolCall.input).
           trace(`exec: EMITTED tool-call toolCallId=${tc.toolCallId} toolName=${tc.toolName} inputLen=${tc.input.length}`)
           emittedHostTools++
@@ -3261,14 +3344,22 @@ export function buildOpenCodeInteractionGuidance(
     instructions.push(
       "- To enter plan mode, call the OpenCode `plan_enter` tool. Cursor-native SwitchMode requests for plan/spec are also accepted and answered through it.",
     )
-  } else if (names.has("todowrite")) {
-    instructions.push(
-      "- For planning task lists, call the OpenCode `todowrite` tool and/or write the plan as normal markdown.",
-    )
   }
   if (names.has("plan_exit")) {
     instructions.push(
       "- To leave plan mode, call the OpenCode `plan_exit` tool. Cursor-native SwitchMode for any non-plan target (agent, build, chat, debug, edit, background, multitask, triage, project, …) is also accepted and answered through it; the provider then injects the Cursor CLI-shaped mode reminder for that target.",
+    )
+  }
+  // Prefer host todos whenever advertised. Keep guidance terse — spelling out
+  // Cursor TodoWrite vs TodoRead / MCP alias collisions teaches the model to
+  // inventory catalogs instead of just calling the host tools.
+  if (names.has("todowrite") || names.has("todoread")) {
+    const write = names.has("todowrite") ? "`todowrite`" : undefined
+    const read = names.has("todoread") ? "`todoread`" : undefined
+    const tools =
+      write && read ? `${write} / ${read}` : (write ?? read)!
+    instructions.push(
+      `- For task-list create/update/complete/cancel${read ? "/read" : ""}, call OpenCode ${tools}; do not use Cursor TodoWrite, and do not narrate Cursor-vs-OpenCode todo-tool differences.`,
     )
   }
   if (names.has(CUSTOM_WEBSEARCH_TOOL)) {
@@ -3329,8 +3420,8 @@ export function buildOpenCodeInteractionGuidance(
     `OpenCode exposes exactly these executable tools for this turn: ${[...names].map((name) => `\`${name}\``).join(", ")}.`,
     `Workspace root: ${JSON.stringify(workspaceRoot)}. Resolve workspace paths against exactly this root; never invent an absolute prefix, and verify uncertain paths with an available tool before using them.`,
     subagents.executor
-      ? "Call only tools in that exact list for ordinary host execution. Cursor-native Task/subagent requests are permitted because a compatible host executor is listed. Bridged Cursor interactions named below (AskQuestion, SwitchMode, CreatePlan, …) are not OpenCode/MCP catalog tools — raise them normally and do not narrate that they are missing."
-      : "Call only tools in that exact list for ordinary host execution. Bridged Cursor interactions named below (AskQuestion, SwitchMode, CreatePlan, …) are not OpenCode/MCP catalog tools — raise them normally and do not narrate that they are missing. Other unlisted Cursor-native tools are not bridged; complete the work with the listed tools or explain the limitation without claiming a missing MCP tool.",
+      ? "Call only tools in that exact OpenCode list for ordinary host execution. Cursor-native Task/subagent requests are permitted because a compatible host executor is listed. Bridged Cursor interactions named below (AskQuestion, SwitchMode, CreatePlan, …) are not OpenCode/MCP catalog tools — raise them normally and do not narrate that they are missing."
+      : "Call only tools in that exact OpenCode list for ordinary host execution. Bridged Cursor interactions named below (AskQuestion, SwitchMode, CreatePlan, …) are not OpenCode/MCP catalog tools — raise them normally and do not narrate that they are missing. Other unlisted Cursor-native tools are not bridged; complete the work with the listed tools or explain the limitation without claiming a missing MCP tool.",
     ...(instructions.length > 0
       ? ["Use these OpenCode tools instead of equivalent Cursor-native UI interactions:"]
       : []),

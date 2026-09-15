@@ -3,11 +3,14 @@ import protobuf from "protobufjs"
 import { encodeMessage, decodeMessage } from "../src/protocol/messages.js"
 import {
   advertisedToolNamesFromDescriptors,
+  applyTodoMerge,
   extractExecDisplayCallId,
   extractProtobufSubmessage,
   listProtobufFieldNumbers,
   parseDisplayToolCall,
   resolveBridgedOpenCodeToolCall,
+  snapshotMirroredTodos,
+  snapshotMirroredTodosFromReadOutput,
 } from "../src/protocol/tool-call-bridge.js"
 
 function encodeCanonicalToolCall(
@@ -134,13 +137,173 @@ describe("tool-call-bridge", () => {
     })
     expect(resolveBridgedOpenCodeToolCall(mergeWithoutFinalState!, ["todowrite"])).toBeUndefined()
 
-    const readTodos = parseDisplayToolCall("read", { read_todos_tool_call: { args: {} } })
-    expect(resolveBridgedOpenCodeToolCall(readTodos!, ["todowrite"])).toBeUndefined()
-
     const leavePlan = parseDisplayToolCall("leave", {
       switch_mode_tool_call: { args: { target_mode_id: "agent" } },
     })
     expect(resolveBridgedOpenCodeToolCall(leavePlan!, ["todowrite"])).toBeUndefined()
+  })
+
+  it("mirrors Cursor TodoRead display calls into todoread", () => {
+    const display = parseDisplayToolCall("read", {
+      read_todos_tool_call: {
+        args: { status_filter: [1, 3], id_filter: ["todo-7"] },
+        result: {
+          success: {
+            todos: [{ id: "todo-7", content: "visible", status: 1 }],
+            total_count: 1,
+          },
+        },
+      },
+    })
+    expect(display?.variant).toBe("read_todos_tool_call")
+    expect(display?.preferredToolName).toBe("todoread")
+    expect(display?.args).toEqual({})
+    expect(display?.bridgeable).toBe(true)
+    expect(resolveBridgedOpenCodeToolCall(display!, ["todoread"])).toEqual({
+      toolName: "todoread",
+      callId: "read",
+      variant: "read_todos_tool_call",
+      args: {},
+    })
+    expect(resolveBridgedOpenCodeToolCall(display!, ["todowrite"])).toBeUndefined()
+  })
+
+  it("applies merge updates against a prior mirrored todo snapshot", () => {
+    const prior = [
+      { id: "1", content: "Wire bridge", status: "in_progress", priority: "medium" },
+      { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+    ]
+    const display = parseDisplayToolCall(
+      "merge-prior",
+      {
+        update_todos_tool_call: {
+          args: {
+            merge: true,
+            todos: [{ id: "1", content: "Wire bridge", status: 3 }],
+          },
+        },
+      },
+      prior,
+    )
+    expect(display?.bridgeable).toBe(true)
+    expect(display?.args.todos).toEqual([
+      { id: "1", content: "Wire bridge", status: "completed", priority: "medium" },
+      { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+    ])
+    expect(resolveBridgedOpenCodeToolCall(display!, ["todowrite"])).toEqual({
+      toolName: "todowrite",
+      callId: "merge-prior",
+      variant: "update_todos_tool_call",
+      args: {
+        todos: [
+          { id: "1", content: "Wire bridge", status: "completed", priority: "medium" },
+          { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+        ],
+      },
+    })
+  })
+
+  it("preserves prior content when a merge patch carries id+status only", () => {
+    const prior = [
+      { id: "1", content: "Keep this text", status: "in_progress", priority: "high" },
+    ]
+    const display = parseDisplayToolCall(
+      "merge-sparse",
+      {
+        update_todos_tool_call: {
+          args: {
+            merge: true,
+            todos: [{ id: "1", status: 3 }],
+          },
+        },
+      },
+      prior,
+    )
+    expect(display?.bridgeable).toBe(true)
+    expect(display?.args.todos).toEqual([
+      { id: "1", content: "Keep this text", status: "completed", priority: "high" },
+    ])
+  })
+
+  it("matches merge patches by content across id spaces without duplicating", () => {
+    const prior = [
+      { id: "todo_1", content: "Host-written task", status: "pending", priority: "medium" },
+    ]
+    // Same task, Cursor-side id: status applies, prior id and order kept.
+    expect(
+      applyTodoMerge(prior, [{ id: "9", content: "Host-written task", status: 3 }]),
+    ).toEqual([
+      { id: "todo_1", content: "Host-written task", status: "completed", priority: "medium" },
+    ])
+    // Status-only patch for an unknown id with no content carries no mappable
+    // information: skip it rather than appending a content-less item.
+    expect(applyTodoMerge(prior, [{ id: "9", status: 3 }])).toEqual(prior)
+    // New content still appends.
+    expect(
+      applyTodoMerge(prior, [{ id: "9", content: "Brand new", status: 1 }]),
+    ).toEqual([
+      { id: "todo_1", content: "Host-written task", status: "pending", priority: "medium" },
+      { id: "9", content: "Brand new", status: "pending", priority: "medium" },
+    ])
+  })
+
+  it("snapshots full todo lists and parses host read results", () => {
+    expect(
+      snapshotMirroredTodos([
+        { content: "a", status: "pending" },
+        { id: "plan", content: "synthetic", status: "pending" },
+      ]),
+    ).toEqual([
+      { id: "todo_1", content: "a", status: "pending", priority: "medium" },
+    ])
+    expect(snapshotMirroredTodos(undefined)).toBeUndefined()
+    expect(
+      snapshotMirroredTodosFromReadOutput(
+        JSON.stringify([{ id: "1", content: "x", status: "completed" }]),
+      ),
+    ).toEqual([
+      { id: "1", content: "x", status: "completed", priority: "medium" },
+    ])
+    expect(
+      snapshotMirroredTodosFromReadOutput(
+        JSON.stringify({ todos: [{ id: "1", content: "x", status: 1 }] }),
+      ),
+    ).toEqual([
+      { id: "1", content: "x", status: "pending", priority: "medium" },
+    ])
+    expect(snapshotMirroredTodosFromReadOutput("No todos yet")).toBeUndefined()
+    expect(snapshotMirroredTodosFromReadOutput(JSON.stringify({ ok: true }))).toBeUndefined()
+  })
+
+  it("prefers ToolCallCompleted todos over a prior snapshot for merges", () => {
+    const prior = [
+      { id: "1", content: "stale", status: "pending", priority: "medium" },
+    ]
+    const display = parseDisplayToolCall(
+      "merge-completed",
+      {
+        update_todos_tool_call: {
+          args: {
+            merge: true,
+            todos: [{ id: "1", content: "partial", status: 3 }],
+          },
+          result: {
+            success: {
+              todos: [
+                { id: "1", content: "final", status: 3 },
+                { id: "2", content: "kept", status: 1 },
+              ],
+              was_merge: true,
+            },
+          },
+        },
+      },
+      prior,
+    )
+    expect(display?.args.todos).toEqual([
+      { id: "1", content: "final", status: "completed", priority: "medium" },
+      { id: "2", content: "kept", status: "pending", priority: "medium" },
+    ])
   })
 
   it("decodes edit and task calls without replaying completed operations", () => {
@@ -531,8 +694,14 @@ describe("tool-call-bridge", () => {
       expect(display!.variant, c.variant).toBe(c.variant)
       expect(display!.preferredToolName, c.variant).toBe(c.preferred)
       const bridged = resolveBridgedOpenCodeToolCall(display!, c.advertised)
-      if (c.variant === "update_todos_tool_call" || c.variant === "create_plan_tool_call") {
+      if (
+        c.variant === "update_todos_tool_call" ||
+        c.variant === "create_plan_tool_call"
+      ) {
         expect(bridged?.toolName, c.variant).toBe("todowrite")
+      } else if (c.variant === "read_todos_tool_call") {
+        expect(bridged?.toolName, c.variant).toBe("todoread")
+        expect(bridged?.args, c.variant).toEqual({})
       } else {
         expect(bridged, c.variant).toBeUndefined()
       }

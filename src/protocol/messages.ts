@@ -291,11 +291,29 @@ export function createMessageTypes(): protobuf.Root {
   addType(root, "PiFindToolCall", [{ id: 1, name: "args", type: "PiFindToolArgs" }])
   addType(root, "PiLsToolCall", [{ id: 1, name: "args", type: "PiLsToolArgs" }])
   // Display-only native tools Cursor may complete without an ExecServerMessage.
+  // ReadTodos mirrors UpdateTodos: args + result (see agent.v1 ReadTodosToolCall).
   addType(root, "ReadTodosArgs", [
     { id: 1, name: "status_filter", type: "TodoStatus", repeated: true },
     { id: 2, name: "id_filter", type: "string", repeated: true },
   ])
-  addType(root, "ReadTodosToolCall", [{ id: 1, name: "args", type: "ReadTodosArgs" }])
+  addType(root, "ReadTodosSuccess", [
+    { id: 1, name: "todos", type: "TodoItem", repeated: true },
+    { id: 2, name: "total_count", type: "int32" },
+  ])
+  addType(root, "ReadTodosError", [{ id: 1, name: "error", type: "string" }])
+  addType(
+    root,
+    "ReadTodosResult",
+    [
+      { id: 1, name: "success", type: "ReadTodosSuccess" },
+      { id: 2, name: "error", type: "ReadTodosError" },
+    ],
+    [{ name: "result", fields: ["success", "error"] }],
+  )
+  addType(root, "ReadTodosToolCall", [
+    { id: 1, name: "args", type: "ReadTodosArgs" },
+    { id: 2, name: "result", type: "ReadTodosResult" },
+  ])
   addType(root, "AwaitArgs", [
     { id: 1, name: "task_id", type: "string" },
     { id: 2, name: "block_until_ms", type: "uint32" },

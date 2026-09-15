@@ -227,6 +227,12 @@ export type CursorSession = {
    */
   displayToolCalls: Map<string, Record<string, unknown>>
   /**
+   * Last full todo snapshot successfully mirrored into OpenCode `todowrite`.
+   * Used to apply Cursor `merge: true` display updates that omit the final
+   * completed list so host todos still receive a replace-all snapshot.
+   */
+  mirroredTodos?: Array<Record<string, unknown>>
+  /**
    * Legacy edit calls whose authoritative exec path is still in progress.
    * Cursor implements these as read -> whole-file write; retaining the path
    * lets the pump expose the final mutation to OpenCode as a targeted edit.
@@ -666,6 +672,7 @@ export class SessionManager {
     session.pumpOwner = null
     session.pumpActive = false
     session.displayToolCalls?.clear()
+    session.mirroredTodos = undefined
     session.blobs?.clear()
     this.sessions.delete(session)
     if (

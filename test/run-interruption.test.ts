@@ -6,6 +6,8 @@ import {
   MAX_CHECKPOINT_BLOB_GRAPH_BYTES,
   pump,
   pumpWithRecovery,
+  rememberMirroredTodos,
+  snapshotMirroredTodosBySession,
 } from "../src/language-model.js"
 import { decodeMessage, encodeMessage } from "../src/protocol/messages.js"
 import type { CursorSession, Frame } from "../src/session.js"
@@ -715,6 +717,33 @@ describe("interrupted Cursor Run handling", () => {
         usedTokens: 103_144,
       },
     })
+  })
+
+  it("carries the mirrored todo snapshot across Runs of one OpenCode session", () => {
+    // Turn_ended closes the Run session (wiping Run-local state), but merges
+    // in later turns still need a base. The per-session copy survives across
+    // Runs, resumes, and rebases; it never enters the prompt, so the cache
+    // prefix is untouched.
+    const key = `mirror-todos-${Date.now()}`
+    expect(snapshotMirroredTodosBySession(key)).toBeUndefined()
+    expect(snapshotMirroredTodosBySession(undefined)).toBeUndefined()
+    rememberMirroredTodos(undefined, [
+      { id: "1", content: "noop", status: "pending", priority: "medium" },
+    ])
+    expect(snapshotMirroredTodosBySession(key)).toBeUndefined()
+    const first = [
+      { id: "1", content: "kept", status: "in_progress", priority: "medium" },
+    ]
+    rememberMirroredTodos(key, first)
+    const snap = snapshotMirroredTodosBySession(key)
+    expect(snap).toEqual(first)
+    // Copies, not aliases: mutating a snapshot must not corrupt the store.
+    expect(snap).not.toBe(first)
+    snap![0]!.status = "completed"
+    expect(snapshotMirroredTodosBySession(key)).toEqual(first)
+    // Wholesale replace on every store — tracks host truth, never merges.
+    rememberMirroredTodos(key, [])
+    expect(snapshotMirroredTodosBySession(key)).toEqual([])
   })
 
   it("preserves the live user request when rebasing recovery history", () => {
