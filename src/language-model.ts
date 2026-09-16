@@ -3721,6 +3721,7 @@ export function resetTurnStateForTests(): void {
   toolCatalogWaitersBySession.clear()
   toolCatalogBySession.clear()
   postCompactionRebaseBySession.clear()
+  mirroredTodosBySession.clear()
 }
 
 function extractUserText(lastUser: Record<string, unknown> | undefined): string {

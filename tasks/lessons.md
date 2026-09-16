@@ -261,6 +261,41 @@
   result, path, and schema translation in OCP. This keeps architectural cleanup
   from silently deleting working compatibility.
 
+## 2026-09-15 — Cursor native todos mirror into host todowrite/todoread
+
+- **Cursor TodoWrite/TodoRead are display completions, not exec requests.** When
+  the host advertises `todowrite` / `todoread`, mirror finalized display state
+  into those tools. Prefer terse host-todo guidance; spelling out Cursor-vs-
+  OpenCode catalog collisions teaches the model to inventory tools instead of
+  calling the host ones.
+- **OpenCode `todowrite` is replace-all.** Cursor `merge: true` patches that omit
+  `success.todos` must expand against the last observed full list (match by id,
+  then by content across id spaces) or the bridge must decline — never send a
+  partial list that would wipe host state.
+- **`session.mirroredTodos` dies with the Run** (`turn_ended` closes the
+  session). Keep a per-OpenCode-session copy (`mirroredTodosBySession`), seed it
+  in `startSession`, and refresh it from bridged writes, direct host
+  `todowrite`, and recognizable `todoread` JSON. Same pattern and cap as
+  `toolCatalogBySession`.
+- **Process restart clearing the snapshot is intentional, not a bug.** The map
+  is in-memory only — never prompt, RequestContext, or persisted restart state —
+  so Cursor's prompt-cache prefix stays intact. After a provider/process
+  restart, the first `merge: true` without a completed list declines until a
+  write/read refreshes the map. Do not "fix" this by persisting todos into
+  restart state or the prompt.
+- **Host `todoread` takes `{}`.** Drop Cursor `status_filter` / `id_filter`; they
+  are not part of the canonical host schema. Non-JSON read output must leave the
+  prior snapshot alone.
+- **Scope stays in the Cursor provider.** Devin has no native TodoWrite rival;
+  OCP/pi-bridge already remaps host names. Do not port this collision machinery
+  elsewhere without a real dual-catalog bug.
+- **Do not seed the snapshot from Cursor `read_todos` success unless observed.**
+  Host JSON `todoread` already refreshes the map; Cursor-side seed only helps
+  when the host returns non-JSON and the next merge omits `success.todos`. That
+  path can disagree with host truth — see
+  `tasks/plans/optional-seed-todo-snapshot-from-cursor-read.md` (implement only
+  if that failure is diagnosed live).
+
 ## 2026-08-25 — Pricing gate before every release
 
 - **CI regenerating pricing is a backstop, not permission to skip the local

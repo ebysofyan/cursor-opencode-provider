@@ -1,9 +1,14 @@
-import { describe, expect, it } from "bun:test"
+import { describe, expect, it, afterEach } from "bun:test"
 import fs from "node:fs"
 import path from "node:path"
 import { decodeMessage, encodeMessage } from "../src/protocol/messages.js"
 import { toolsToDescriptors, toolsToMcpDescriptors } from "../src/protocol/tools.js"
-import { pump } from "../src/language-model.js"
+import {
+  pump,
+  rememberMirroredTodos,
+  resetTurnStateForTests,
+  snapshotMirroredTodosBySession,
+} from "../src/language-model.js"
 import { sessionManager, type CursorSession, type Frame } from "../src/session.js"
 import { CursorProtocolError } from "../src/errors.js"
 
@@ -174,6 +179,11 @@ function fakeSession(
 }
 
 describe("display-only ToolCall pump bridge", () => {
+  afterEach(() => {
+    sessionManager.dispose()
+    resetTurnStateForTests()
+  })
+
   it("continues a new-file edit through write instead of shell fallback", async () => {
     const writes: Uint8Array[] = []
     const parts: any[] = []
@@ -788,6 +798,107 @@ describe("display-only ToolCall pump bridge", () => {
     expect(parts.some((p) => p.type === "tool-call")).toBe(false)
     expect(parts.some((p) => p.type === "finish")).toBe(true)
     expect(session.pending.size).toBe(0)
+  })
+
+  it("bridges a merge without final state when the Run already has a mirrored prior", async () => {
+    // Regression for the omp stuck-todo path: Cursor often sends merge:true
+    // with only the patch and no success.todos. The pump must expand against
+    // session.mirroredTodos and emit a replace-all todowrite.
+    const writes: Uint8Array[] = []
+    const parts: any[] = []
+    const callId = "todos-merge-from-prior"
+    const toolCall = {
+      update_todos_tool_call: {
+        args: {
+          merge: true,
+          todos: [{ id: "1", content: "Wire bridge", status: 3 }],
+        },
+      },
+    }
+    const session = fakeSession(
+      [displayPayload("started", callId, toolCall), displayPayload("completed", callId, toolCall)],
+      writes,
+    )
+    session.nextBridgedExecId = 900_021
+    session.mirroredTodos = [
+      { id: "1", content: "Wire bridge", status: "in_progress", priority: "medium" },
+      { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+    ]
+    const controller = {
+      enqueue(part: unknown) {
+        parts.push(part)
+      },
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    const toolPart = parts.find((p) => p.type === "tool-call")
+    expect(toolPart?.toolName).toBe("todowrite")
+    expect(JSON.parse(toolPart.input).todos).toEqual([
+      { id: "1", content: "Wire bridge", status: "completed", priority: "medium" },
+      { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+    ])
+    expect(session.mirroredTodos).toEqual([
+      { id: "1", content: "Wire bridge", status: "completed", priority: "medium" },
+      { id: "2", content: "Add tests", status: "pending", priority: "medium" },
+    ])
+    sessionManager.resolve(session.sessionId, 900_021)
+  })
+
+  it("seeds merges after Run close from the per-OpenCode-session mirrored snapshot", async () => {
+    // startSession seeds mirroredTodos from snapshotMirroredTodosBySession.
+    // Prove the contract end-to-end: store → wipe Run → reseed → merge without
+    // success.todos still bridges. Process restart is intentionally out of scope.
+    resetTurnStateForTests()
+    const openCodeSessionId = `mirror-seed-${Date.now()}`
+    const prior = [
+      { id: "kept", content: "Kept", status: "pending", priority: "medium" },
+      { id: "changed", content: "Old title", status: "in_progress", priority: "medium" },
+    ]
+    rememberMirroredTodos(openCodeSessionId, prior)
+    expect(snapshotMirroredTodosBySession(openCodeSessionId)).toEqual(prior)
+
+    const writes: Uint8Array[] = []
+    const parts: any[] = []
+    const callId = "todos-merge-after-reseed"
+    const toolCall = {
+      update_todos_tool_call: {
+        args: {
+          merge: true,
+          todos: [{ id: "changed", content: "Old title", status: 3 }],
+        },
+      },
+    }
+    const session = fakeSession(
+      [displayPayload("started", callId, toolCall), displayPayload("completed", callId, toolCall)],
+      writes,
+    )
+    session.nextBridgedExecId = 900_022
+    session.openCodeSessionId = openCodeSessionId
+    // Same seeding startSession performs after turn_ended closed the prior Run.
+    session.mirroredTodos = snapshotMirroredTodosBySession(openCodeSessionId)
+    const controller = {
+      enqueue(part: unknown) {
+        parts.push(part)
+      },
+      error() {},
+    } as ReadableStreamDefaultController<any>
+
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+
+    const toolPart = parts.find((p) => p.type === "tool-call")
+    expect(toolPart?.toolName).toBe("todowrite")
+    expect(JSON.parse(toolPart.input).todos).toEqual([
+      { id: "kept", content: "Kept", status: "pending", priority: "medium" },
+      { id: "changed", content: "Old title", status: "completed", priority: "medium" },
+    ])
+    expect(snapshotMirroredTodosBySession(openCodeSessionId)).toEqual([
+      { id: "kept", content: "Kept", status: "pending", priority: "medium" },
+      { id: "changed", content: "Old title", status: "completed", priority: "medium" },
+    ])
+    sessionManager.resolve(session.sessionId, 900_022)
+    resetTurnStateForTests()
   })
 
   it("decodes await_tool_call without bridging when await is not advertised", async () => {

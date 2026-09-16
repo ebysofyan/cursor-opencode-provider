@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import { sessionManager, type CursorSession } from "../src/session.js"
-import { findContinuationSession, deliverContinuationResults, extractTrailingToolResults } from "../src/language-model.js"
+import { findContinuationSession, deliverContinuationResults, extractTrailingToolResults, rememberMirroredTodos, resetTurnStateForTests, snapshotMirroredTodosBySession } from "../src/language-model.js"
 import { CursorRunInterruptedError } from "../src/transport/connect.js"
 import { decodeMessage } from "../src/protocol/messages.js"
 import { CREATE_PLAN_RESULT_FIELD } from "../src/protocol/create-plan.js"
@@ -55,6 +55,7 @@ function toolMsg(sessionId: string, execId: number): LanguageModelV3CallOptions[
 afterEach(() => {
   sessionManager.dispose()
   resetCursorShellCalls()
+  resetTurnStateForTests()
 })
 
 describe("findContinuationSession", () => {
@@ -378,5 +379,55 @@ describe("deliverContinuationResults", () => {
     expect(kept).toBe(live)
     expect(writes).toHaveLength(0)
     expect(live.pending.has(900_001)).toBe(false)
+  })
+
+  it("refreshes the mirrored todo snapshot from a host todoread result", () => {
+    // Bridged Cursor TodoRead and direct host todoread share this path. Host
+    // JSON is authoritative for later merge:true patches; prose/errors leave
+    // the prior snapshot alone.
+    const openCodeSessionId = `todoread-refresh-${Date.now()}`
+    const live = fakeSession("todoread-sess")
+    live.openCodeSessionId = openCodeSessionId
+    live.mirroredTodos = [
+      { id: "stale", content: "old", status: "pending", priority: "medium" },
+    ]
+    rememberMirroredTodos(openCodeSessionId, live.mirroredTodos)
+    sessionManager.registerPending(900_002, live, "todoread", "todoread", true)
+
+    const kept = deliverContinuationResults(live, [
+      {
+        sessionId: "todoread-sess",
+        execId: 900_002,
+        toolName: "todoread",
+        output: JSON.stringify({
+          todos: [
+            { id: "1", content: "from host", status: "completed", priority: "high" },
+            { id: "2", content: "still open", status: "pending" },
+          ],
+        }),
+      },
+    ])
+
+    expect(kept).toBe(live)
+    expect(live.mirroredTodos).toEqual([
+      { id: "1", content: "from host", status: "completed", priority: "high" },
+      { id: "2", content: "still open", status: "pending", priority: "medium" },
+    ])
+    expect(snapshotMirroredTodosBySession(openCodeSessionId)).toEqual(live.mirroredTodos)
+
+    // Non-JSON host output must not wipe a useful prior.
+    sessionManager.registerPending(900_003, live, "todoread", "todoread", true)
+    deliverContinuationResults(live, [
+      {
+        sessionId: "todoread-sess",
+        execId: 900_003,
+        toolName: "todoread",
+        output: "No todos yet",
+      },
+    ])
+    expect(snapshotMirroredTodosBySession(openCodeSessionId)).toEqual([
+      { id: "1", content: "from host", status: "completed", priority: "high" },
+      { id: "2", content: "still open", status: "pending", priority: "medium" },
+    ])
   })
 })
