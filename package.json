@@ -1,18 +1,18 @@
 {
   "name": "cursor-opencode-provider",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "Use Cursor subscription models from OpenCode via Cursor's Connect-RPC agent protocol",
   "type": "module",
   "license": "MIT",
   "author": "oakimov",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/oakimov/cursor-opencode-provider.git"
+    "url": "git+https://github.com/ebysofyan/cursor-opencode-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/oakimov/cursor-opencode-provider/issues"
+    "url": "https://github.com/ebysofyan/cursor-opencode-provider/issues"
   },
-  "homepage": "https://github.com/oakimov/cursor-opencode-provider#readme",
+  "homepage": "https://github.com/ebysofyan/cursor-opencode-provider#readme",
   "keywords": [
     "opencode",
     "opencode-plugin",

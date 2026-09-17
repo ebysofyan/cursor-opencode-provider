@@ -325,12 +325,27 @@ export type PluginContext = {
   readonly app: App
   readonly options: Readonly<Record<string, any>>
   readonly aisdk: AISDKDomain
-  readonly catalog: CatalogDomain
+  /**
+   * Present on OpenCode 2.0 beta builds that expose the unified catalog domain.
+   * Stable 2.0.5 omits this — use config `providers.cursor` sync instead.
+   */
+  readonly catalog?: CatalogDomain
   readonly event: EventDomain
   readonly integration: IntegrationDomain
   readonly session: SessionDomain
   readonly tool: ToolDomain
-  readonly websearch: WebSearchDomain
+  readonly websearch?: WebSearchDomain
+  /** Split provider domain on stable 2.0.5 (transforms do not flush to picker). */
+  readonly provider?: {
+    readonly list: () => Promise<any> | any
+    readonly reload?: () => Promise<void>
+    readonly transform?: Transform<any>
+  }
+  readonly model?: {
+    readonly list: () => Promise<any> | any
+    readonly reload?: () => Promise<void>
+    readonly transform?: Transform<any>
+  }
 }
 
 export type Cleanup = () => Promise<void> | void
