@@ -7,12 +7,12 @@
   "author": "oakimov",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ebysofyan/cursor-opencode-provider.git"
+    "url": "git+https://github.com/oakimov/cursor-opencode-provider.git"
   },
   "bugs": {
-    "url": "https://github.com/ebysofyan/cursor-opencode-provider/issues"
+    "url": "https://github.com/oakimov/cursor-opencode-provider/issues"
   },
-  "homepage": "https://github.com/ebysofyan/cursor-opencode-provider#readme",
+  "homepage": "https://github.com/oakimov/cursor-opencode-provider#readme",
   "keywords": [
     "opencode",
     "opencode-plugin",
