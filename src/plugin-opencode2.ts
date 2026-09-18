@@ -19,7 +19,10 @@ import {
   sanitizeRegisteredCursorShellOutput,
 } from "./shell-timeout.js"
 import { applyCursorModels, applyCursorProvider } from "./opencode2/catalog.js"
-import { hasCatalogDomain, syncCursorProvidersConfig } from "./opencode2/config-catalog.js"
+import {
+  hasCatalogDomain,
+  syncCursorProvidersConfigAndReload,
+} from "./opencode2/config-catalog.js"
 import { applyCursorIntegration, resolveCursorAccessToken } from "./opencode2/integration.js"
 import { markCompactionSession } from "./compaction-marker.js"
 import { markSessionDirectory } from "./session-directory.js"
@@ -85,6 +88,7 @@ const plugin: Plugin2 = {
 
     let models: ModelInfo[] = []
     const useCatalog = hasCatalogDomain(ctx)
+    let stableReloadPending = false
 
     // ── Credentials ──────────────────────────────────────────────────────────
     await track(ctx.integration.transform(applyCursorIntegration))
@@ -126,27 +130,34 @@ const plugin: Plugin2 = {
         const cached = await readCache(cacheDir)
         if (cached?.models?.length) {
           models = cached.models
-          syncCursorProvidersConfig(models)
+          await syncCursorProvidersConfigAndReload(models, {
+            provider: () => ctx.provider?.reload?.(),
+            model: () => ctx.model?.reload?.(),
+          })
         }
       } catch {
+        stableReloadPending = true
         // Config write is best-effort; auth/aisdk still work without it.
       }
     }
 
-    const publishModels = async (next: ModelInfo[]): Promise<void> => {
+    const publishModels = async (next: ModelInfo[]): Promise<boolean> => {
       models = next
       if (useCatalog && ctx.catalog) {
         await ctx.catalog.reload().catch(() => {})
-        return
+        return true
       }
       try {
-        const synced = syncCursorProvidersConfig(next)
-        if (synced.changed) {
-          await ctx.provider?.reload?.().catch(() => {})
-          await ctx.model?.reload?.().catch(() => {})
-        }
+        await syncCursorProvidersConfigAndReload(next, {
+          provider: () => ctx.provider?.reload?.(),
+          model: () => ctx.model?.reload?.(),
+        }, { forceReload: stableReloadPending })
+        stableReloadPending = false
+        return true
       } catch {
-        // ignore — picker may need a service restart to pick up config
+        // Leave model loading retryable; auth/aisdk remain usable.
+        stableReloadPending = true
+        return false
       }
     }
 
@@ -330,8 +341,8 @@ const plugin: Plugin2 = {
           const token = await accessToken()
           const discovered = await loadModels(cacheDir, token)
           if (!discovered.length) return
+          if (!await publishModels(discovered)) return
           modelsLoaded = true
-          await publishModels(discovered)
           if (token) {
             // Resolve the region-specific Run origin so the first turn doesn't
             // pay for GetServerConfig. Best effort: startSession surfaces real

@@ -110,7 +110,7 @@ Point classic OpenCode config at the built files with absolute `file://` URLs:
 }
 ```
 
-For **OpenCode 2.0** local development, prefer the plugin path plus `CURSOR_OPENCODE2_DEV_ENTRY` — see [OpenCode 2.0 beta](#opencode-20-beta-opencode2).
+For **OpenCode 2.0** local development, prefer the plugin path plus `CURSOR_OPENCODE2_DEV_ENTRY` — see [OpenCode 2.0](#opencode-20-opencode2).
 
 ## OpenCode setup
 
@@ -428,7 +428,7 @@ OpenCode
 |--------|------|
 | `src/plugin.ts` | Classic OpenCode hooks: provider registration, OAuth, API key exchange, token refresh |
 | `src/plugin-v2.ts` | OpenCode 1.18 Effect/Promise v2 plugin (`ctx.aisdk.*`); load via `./plugin/v2` only |
-| `src/plugin-opencode2.ts` | OpenCode 2.0 beta plugin (catalog, integration, tools, aisdk); load via `./plugin/opencode2` only |
+| `src/plugin-opencode2.ts` | OpenCode 2.0 plugin (stable/beta catalog fallback, integration, tools, aisdk); load via `./plugin/opencode2` only |
 | `src/opencode2/` | 2.0-only catalog mapping, integration/auth, and local API types |
 | `src/plugin-core.ts` | Host-neutral SDK factory, package matching, API base/telemetry resolution |
 | `src/model-config.ts` | Cursor model → OpenCode model mapping shared by every plugin surface |
@@ -489,7 +489,7 @@ Kilo `scout` is reserved for external documentation, dependency repositories, an
 | `cursor-opencode-provider` | `createCursor`, `CursorPlugin` (named + default) |
 | `cursor-opencode-provider/plugin` | `CursorPlugin` (classic Hooks — auth) |
 | `cursor-opencode-provider/plugin/v2` | OpenCode 1.18 Effect/Promise v2 plugin (`ctx.aisdk.*`) |
-| `cursor-opencode-provider/plugin/opencode2` | OpenCode 2.0 beta plugin (self-registering: catalog + auth + tools) |
+| `cursor-opencode-provider/plugin/opencode2` | OpenCode 2.0 plugin (self-registering: stable/beta models + auth + tools) |
 | `cursor-opencode-provider/errors` | Structured provider error classes |
 | `cursor-opencode-provider/image-save` | Host-neutral `executeCursorImageSave` (pi-bridge / non-plugin hosts) |
 

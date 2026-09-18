@@ -32,6 +32,15 @@ export type ConfigCatalogSyncResult = {
   skipped?: "parse_error" | "unchanged"
 }
 
+export type StableDomainReloads = {
+  provider?: () => Promise<void> | void
+  model?: () => Promise<void> | void
+}
+
+export type StableDomainReloadOptions = {
+  forceReload?: boolean
+}
+
 function configDir(): string {
   return process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
 }
@@ -95,50 +104,39 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
       ? (doc.provider as Record<string, unknown>)
       : {}
 
-  const prev = JSON.stringify(providers[CURSOR_PROVIDER_ID] ?? legacyProvider[CURSOR_PROVIDER_ID] ?? null)
-  const next = JSON.stringify(nextProvider)
-  const needsLegacyDrop =
-    Object.prototype.hasOwnProperty.call(legacyProvider, CURSOR_PROVIDER_ID)
+  const currentProvider = providers[CURSOR_PROVIDER_ID] ?? legacyProvider[CURSOR_PROVIDER_ID]
+  const currentManaged =
+    currentProvider && typeof currentProvider === "object" && !Array.isArray(currentProvider)
+      ? (currentProvider as Record<string, unknown>)
+      : undefined
+  const prev = JSON.stringify({
+    name: currentManaged?.name,
+    package: currentManaged?.package,
+    integrationID: currentManaged?.integrationID,
+    models: currentManaged?.models,
+  })
+  const next = JSON.stringify({
+    name: nextProvider.name,
+    package: nextProvider.package,
+    integrationID: nextProvider.integrationID,
+    models: nextProvider.models,
+  })
+  const hasPreferredProvider = Object.prototype.hasOwnProperty.call(providers, CURSOR_PROVIDER_ID)
 
-  if (prev === next && !needsLegacyDrop) {
+  if (hasPreferredProvider && prev === next) {
     return { path, modelCount, changed: false, skipped: "unchanged" }
   }
 
   let edited = raw
-  // Surgical upsert — preserves comments and unrelated keys.
-  edited = applyEdits(
-    edited,
-    modify(edited, ["providers", CURSOR_PROVIDER_ID], nextProvider, {
-      formattingOptions: formatting,
-      isArrayInsertion: false,
-    }),
-  )
-
-  if (needsLegacyDrop) {
+  // Surgical managed-field updates preserve provider-level keys and comments.
+  for (const [field, value] of Object.entries(nextProvider)) {
     edited = applyEdits(
       edited,
-      modify(edited, ["provider", CURSOR_PROVIDER_ID], undefined, {
+      modify(edited, ["providers", CURSOR_PROVIDER_ID, field], value, {
         formattingOptions: formatting,
+        isArrayInsertion: false,
       }),
     )
-    // Drop empty legacy `provider` object if we emptied it.
-    const afterErrors: { error: number; offset: number; length: number }[] = []
-    const afterDoc = parse(edited, afterErrors, { allowTrailingComma: true }) as
-      | Record<string, unknown>
-      | undefined
-    if (
-      afterErrors.length === 0 &&
-      afterDoc &&
-      afterDoc.provider &&
-      typeof afterDoc.provider === "object" &&
-      !Array.isArray(afterDoc.provider) &&
-      Object.keys(afterDoc.provider as object).length === 0
-    ) {
-      edited = applyEdits(
-        edited,
-        modify(edited, ["provider"], undefined, { formattingOptions: formatting }),
-      )
-    }
   }
 
   if (edited === raw) {
@@ -147,6 +145,19 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
 
   writeFileSync(path, edited.endsWith("\n") ? edited : `${edited}\n`, "utf8")
   return { path, modelCount, changed: true }
+}
+
+export async function syncCursorProvidersConfigAndReload(
+  models: ModelInfo[],
+  reloads: StableDomainReloads,
+  options: StableDomainReloadOptions = {},
+): Promise<ConfigCatalogSyncResult> {
+  const result = syncCursorProvidersConfig(models)
+  if (!result.changed && !options.forceReload) return result
+
+  if (reloads.provider) await reloads.provider()
+  if (reloads.model) await reloads.model()
+  return result
 }
 
 export function hasCatalogDomain(ctx: { catalog?: { transform?: unknown; reload?: unknown } }): boolean {

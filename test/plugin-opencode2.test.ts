@@ -1,4 +1,7 @@
 import { describe, expect, test, beforeEach } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import plugin from "../src/plugin-opencode2.js"
 import { applyCursorModels, applyCursorProvider, CURSOR_AISDK_PACKAGE } from "../src/opencode2/catalog.js"
 import { applyCursorIntegration, accessTokenFromCredential } from "../src/opencode2/integration.js"
@@ -6,6 +9,9 @@ import { clearCompactionSessions, isCompactionSession, markCompactionSession } f
 import { clearSessionDirectories, getSessionDirectory } from "../src/session-directory.js"
 import { registerCursorShellCall } from "../src/shell-timeout.js"
 import { CURSOR_IMAGE_SAVE_TOOL } from "../src/protocol/generate-image.js"
+import { setHostCacheDirOverride } from "../src/context/paths.js"
+import { writeCache } from "../src/models.js"
+import { MODEL_CACHE_SCHEMA_VERSION } from "../src/shared.js"
 import type {
   CatalogDraft,
   IntegrationDraft,
@@ -354,6 +360,7 @@ describe("opencode2 plugin shape", () => {
 function fakeContext() {
   const registered: string[] = []
   const disposed: string[] = []
+  const reloads: string[] = []
   const hooks = new Map<string, (input: any) => any>()
   const transforms = new Map<string, (draft: any) => void>()
 
@@ -403,6 +410,8 @@ function fakeContext() {
     },
     tool: { ...hookDomain("tool"), ...transformDomain("tool") },
     websearch: transformDomain("websearch"),
+    provider: { reload: async () => void reloads.push("provider") },
+    model: { reload: async () => void reloads.push("model") },
   }
   // `tool` needs both hook and transform; the spreads above would drop `reload`
   // ordering, so rebuild it explicitly.
@@ -411,10 +420,39 @@ function fakeContext() {
     transform: transformDomain("tool").transform,
   }
 
-  return { ctx, registered, disposed, hooks, transforms, sessionLocations }
+  return { ctx, registered, disposed, hooks, transforms, sessionLocations, reloads }
 }
 
 describe("opencode2 setup", () => {
+  test("stable setup reloads provider and model domains after cache seeding", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cursor-oc2-plugin-config-"))
+    const cacheDir = mkdtempSync(join(tmpdir(), "cursor-oc2-plugin-cache-"))
+    const previousConfigDir = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = configDir
+    setHostCacheDirOverride(cacheDir)
+    try {
+      await writeCache(cacheDir, {
+        models: [baseModel],
+        fetchedAt: Date.now(),
+        schemaVersion: MODEL_CACHE_SCHEMA_VERSION,
+      })
+      const { ctx, registered, reloads } = fakeContext()
+      delete ctx.catalog
+
+      const cleanup = await plugin.setup(ctx)
+
+      expect(registered).not.toContain("catalog.transform")
+      expect(reloads).toEqual(["provider", "model"])
+      await cleanup()
+    } finally {
+      setHostCacheDirOverride(undefined)
+      if (previousConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = previousConfigDir
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(cacheDir, { recursive: true, force: true })
+    }
+  })
+
   test("registers every domain it needs and returns a cleanup", async () => {
     const { ctx, registered, transforms } = fakeContext()
     const cleanup = await plugin.setup(ctx)
