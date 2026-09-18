@@ -140,16 +140,16 @@ older APIs.
 Authenticate with `/connect` inside `opencode2`, choose **Cursor**, then either
 browser login or an API key. `CURSOR_API_KEY` is also picked up automatically.
 
-**Stable vs beta (dual path):**
+**How models register:**
 
 | Host | Surface | How models register |
 |------|---------|---------------------|
-| OpenCode 2.0 **beta** (has `ctx.catalog`) | `ctx.catalog.transform` | In-memory catalog upsert |
 | OpenCode 2.0 **stable** (`2.0.5+`, no `ctx.catalog`; verified on `2.0.6` / `2.0.8`) | `providers.cursor` in `$OPENCODE_CONFIG_DIR/opencode.json(c)` | Surgical JSONC upsert after discovery |
+| OpenCode 2.0 with `ctx.catalog` (dev / `next` builds) | `ctx.catalog.transform` | In-memory catalog upsert |
 
 Stable hosts expose `ctx.provider` / `ctx.model` / `ctx.aisdk`, but draft mutations
 there do not flush into the live picker. The plugin therefore syncs the **same**
-model metadata as the beta catalog path (`variants`, `cost`, limits, modalities,
+model metadata as the in-memory catalog path (`variants`, `cost`, limits, modalities,
 wire `modelID` / settings) into `providers.cursor` — and only that block. Parse
 failures fail closed (no rewrite). Classic OpenCode 1.x is unchanged.
 
@@ -436,7 +436,7 @@ OpenCode
 |--------|------|
 | `src/plugin.ts` | Classic OpenCode hooks: provider registration, OAuth, API key exchange, token refresh |
 | `src/plugin-v2.ts` | OpenCode 1.18 Effect/Promise v2 plugin (`ctx.aisdk.*`); load via `./plugin/v2` only |
-| `src/plugin-opencode2.ts` | OpenCode 2.0 plugin (stable/beta catalog fallback, integration, tools, aisdk); load via `./plugin/opencode2` only |
+| `src/plugin-opencode2.ts` | OpenCode 2.0 plugin (`providers.cursor` sync, catalog when present, integration, tools, aisdk); load via `./plugin/opencode2` only |
 | `src/opencode2/` | 2.0-only catalog mapping, integration/auth, and local API types |
 | `src/plugin-core.ts` | Host-neutral SDK factory, package matching, API base/telemetry resolution |
 | `src/model-config.ts` | Cursor model → OpenCode model mapping shared by every plugin surface |
@@ -497,7 +497,7 @@ Kilo `scout` is reserved for external documentation, dependency repositories, an
 | `cursor-opencode-provider` | `createCursor`, `CursorPlugin` (named + default) |
 | `cursor-opencode-provider/plugin` | `CursorPlugin` (classic Hooks — auth) |
 | `cursor-opencode-provider/plugin/v2` | OpenCode 1.18 Effect/Promise v2 plugin (`ctx.aisdk.*`) |
-| `cursor-opencode-provider/plugin/opencode2` | OpenCode 2.0 plugin (self-registering: stable/beta models + auth + tools) |
+| `cursor-opencode-provider/plugin/opencode2` | OpenCode 2.0 plugin (self-registering: models + auth + tools) |
 | `cursor-opencode-provider/errors` | Structured provider error classes |
 | `cursor-opencode-provider/image-save` | Host-neutral `executeCursorImageSave` (pi-bridge / non-plugin hosts) |
 
