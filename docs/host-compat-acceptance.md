@@ -37,12 +37,13 @@ Record: host version, provider/OCP paths, plan URI, Cursor/OpenCode session ids,
 
 ## OpenCode 2.0
 
-1. Load only `cursor-opencode-provider/plugin/opencode2` in stock 2.0.
-2. Enter plan mode and raise CreatePlan.
-3. Approve execution.
-4. Verify the plan is written but CreatePlan returns a clear execution-not-started error because the public SessionDomain cannot select `agent: "build"`.
-5. Verify the provider does not flip to agent mode and does not claim success.
-6. Verify no private/unsupported host API is invoked.
+1. Load only `cursor-opencode-provider/plugin/opencode2` in stock 2.0 (prefer a dedicated `OPENCODE_CONFIG_DIR`; on stable 2.0.x use a `$OPENCODE_CONFIG_DIR/plugins/<name>/` package directory, not a bare `.js` path).
+2. Confirm Cursor auth + models: `/connect` → Cursor, then `providers.cursor` populated (stable) or catalog models present (beta). Filter picker by provider Cursor if needed (`time.released` is `0`).
+3. Enter plan mode and raise CreatePlan.
+4. Approve execution.
+5. Verify the plan is written but CreatePlan returns a clear execution-not-started error because the public SessionDomain cannot select `agent: "build"`.
+6. Verify the provider does not flip to agent mode and does not claim success.
+7. Verify no private/unsupported host API is invoked.
 
 ## OMP interactive plan review
 

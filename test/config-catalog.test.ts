@@ -84,6 +84,8 @@ describe("modelConfigEntryToInfo / catalog parity", () => {
     const entry = config["composer-2.5"] as Record<string, any>
     expect(entry).toBeTruthy()
     const info = modelConfigEntryToInfo("composer-2.5", entry)
+    expect(info.id).toBe("composer-2.5")
+    expect(info.providerID).toBe("cursor")
     expect(info.name).toBeTruthy()
     expect(info.modelID).toBeTruthy()
     expect(info.status).toBe("active")
@@ -153,6 +155,8 @@ describe("modelConfigEntryToInfo / catalog parity", () => {
       const stableModel = stable.providers.cursor.models["claude-sonnet-4-5-1m"]
       const betaModel = betaModels.get("claude-sonnet-4-5-1m")
 
+      expect(stableModel.id).toBe(betaModel.id)
+      expect(stableModel.providerID).toBe(betaModel.providerID)
       expect(stableModel.modelID).toBe(betaModel.modelID)
       expect(stableModel.capabilities).toEqual(betaModel.capabilities)
       expect(stableModel.limit).toEqual(betaModel.limit)
@@ -168,14 +172,14 @@ describe("syncCursorProvidersConfig", () => {
     withConfigDir((dir) => {
       writeFileSync(
         join(dir, "opencode.jsonc"),
-        JSON.stringify({ model: "openai/gpt-5.6-luna", plugin: ["oh-my-opencode-slim"] }, null, 2),
+        JSON.stringify({ model: "openai/gpt-5.6-luna", plugin: ["example-plugin"] }, null, 2),
       )
       const result = syncCursorProvidersConfig(sampleModels)
       expect(result.changed).toBe(true)
       expect(result.modelCount).toBeGreaterThan(0)
       const doc = JSON.parse(readFileSync(join(dir, "opencode.jsonc"), "utf8"))
       expect(doc.model).toBe("openai/gpt-5.6-luna")
-      expect(doc.plugin).toEqual(["oh-my-opencode-slim"])
+      expect(doc.plugin).toEqual(["example-plugin"])
       expect(doc.providers.cursor.package).toContain("aisdk:")
       expect(doc.providers.cursor.integrationID).toBe("cursor")
       const model = doc.providers.cursor.models["composer-2.5"]
@@ -213,7 +217,7 @@ describe("syncCursorProvidersConfig", () => {
   // keep me
   "model": "openai/gpt-5.6-luna",
   /* block comment */
-  "plugin": ["oh-my-opencode-slim"],
+  "plugin": ["example-plugin"],
   "mcp": {
     "context7": { "enabled": true }
   }

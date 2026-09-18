@@ -11,9 +11,9 @@ import {
 } from "./catalog.js"
 
 /**
- * OpenCode 2.0 stable (e.g. 2.0.5 / 2.0.6) ships `ctx.provider` / `ctx.model`
- * but **no** `ctx.catalog`. Plugin transforms on those split domains do not
- * flush into the live model picker (draft mutations stay invisible to `list()`).
+ * OpenCode 2.0 stable (2.0.5+, e.g. 2.0.6 / 2.0.8) ships `ctx.provider` /
+ * `ctx.model` but **no** `ctx.catalog`. Plugin transforms on those split domains
+ * do not flush into the live model picker (draft mutations stay invisible to `list()`).
  *
  * Fallback: surgically upsert discovered Cursor models into
  * `providers.cursor` inside `$OPENCODE_CONFIG_DIR/opencode.json(c)` using

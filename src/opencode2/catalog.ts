@@ -43,8 +43,10 @@ export const CURSOR_AISDK_PACKAGE = process.env.CURSOR_OPENCODE2_DEV_ENTRY
  * surfaces cannot drift.
  */
 export type CatalogModelInfo = {
-  name: string
+  id: string
   modelID: string
+  providerID: string
+  name: string
   capabilities: {
     tools: boolean
     input: string[]
@@ -86,8 +88,10 @@ export function modelConfigEntryToInfo(id: string, entry: Record<string, any>): 
     : ["text"]
 
   const info: CatalogModelInfo = {
-    name: entry.name ?? id,
+    id,
     modelID: wireId,
+    providerID: CURSOR_PROVIDER_ID,
+    name: entry.name ?? id,
     capabilities: {
       tools: entry.tool_call !== false,
       input: inputModalities,
@@ -132,9 +136,9 @@ export function applyCursorProvider(draft: CatalogDraft): void {
 function applyModelEntry(draft: CatalogDraft, id: string, entry: Record<string, any>): void {
   const info = modelConfigEntryToInfo(id, entry)
   draft.model.update(CURSOR_PROVIDER_ID, id, (model) => {
-    model.id = id
+    model.id = info.id
     model.modelID = info.modelID
-    model.providerID = CURSOR_PROVIDER_ID
+    model.providerID = info.providerID
     model.name = info.name
     model.capabilities = info.capabilities
     model.limit = info.limit

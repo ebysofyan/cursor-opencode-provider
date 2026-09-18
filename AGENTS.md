@@ -69,8 +69,8 @@ OpenCode
 | Package entry | `src/index.ts` | `createCursor`; default export = classic `CursorPlugin` |
 | Classic plugin | `src/plugin.ts` | Auth, OAuth, model cache, provider registration |
 | V2 plugin (1.18) | `src/plugin-v2.ts` | Effect/Promise API via `ctx.aisdk.*` — load as `./plugin/v2` **with** classic `plugin` (no `tool` domain; image-save/websearch need classic) |
-| OpenCode 2.0 plugin | `src/plugin-opencode2.ts` | 2.0 beta API — load **only** as `./plugin/opencode2` (registers `custom_websearch` + `cursor_image_save`) |
-| 2.0 support modules | `src/opencode2/` | Catalog mapping, integration/auth, local 2.0 API types |
+| OpenCode 2.0 plugin | `src/plugin-opencode2.ts` | 2.0 stable + beta — load **only** as `./plugin/opencode2` (catalog or `providers.cursor` sync; registers `custom_websearch` + `cursor_image_save`) |
+| 2.0 support modules | `src/opencode2/` | Catalog mapping, stable config sync (`config-catalog.ts`), integration/auth, local 2.0 API types |
 | Host-neutral core | `src/plugin-core.ts`, `src/model-config.ts` | Shared by every plugin surface; must not import a host plugin API |
 | Model pricing | `src/pricing.ts`, `src/pricing-data.ts` | Cursor docs → classic `cost` + OpenCode 2.0 cost tiers; regenerate via `bun run generate:pricing` |
 | Language model | `src/language-model.ts` | AI SDK `LanguageModelV3` (`doStream` / `doGenerate`) |
@@ -93,7 +93,7 @@ Package exports:
 - `cursor-opencode-provider` → `createCursor` + classic plugin
 - `cursor-opencode-provider/plugin` → classic Hooks (auth)
 - `cursor-opencode-provider/plugin/v2` → 1.18 v2 plugin only (`CursorPluginV2` is **not** on the root export)
-- `cursor-opencode-provider/plugin/opencode2` → OpenCode 2.0 beta plugin only
+- `cursor-opencode-provider/plugin/opencode2` → OpenCode 2.0 plugin only (stable + beta)
 - `cursor-opencode-provider/image-save` → host-neutral `executeCursorImageSave` (pi-bridge / non-plugin hosts; not on the package root)
 
 ## OpenCode 2.0 vs the 1.18 "v2" plugin API

@@ -44,8 +44,9 @@ import type { Cleanup, PluginContext, Plugin2 } from "./opencode2/types.js"
  *   synced into user config `providers.cursor` (see `config-catalog.ts`)
  * - OC1 → use classic `./plugin` or `./plugin/v2`, not this entry
  *
- * Load with:  { "plugins": ["cursor-opencode-provider/plugin/opencode2"] }
- * or symlink `dist/plugin-opencode2.js` into `~/.config/opencode2/plugins/`.
+ * Load with:  { "plugin": ["cursor-opencode-provider/plugin/opencode2"] }
+ * or a local package directory under `$OPENCODE_CONFIG_DIR/plugins/` that
+ * re-exports `dist/plugin-opencode2.js` (stable 2.0.x requires a directory, not a .js path).
  */
 
 async function loadModels(cacheDir: string, accessToken: string | undefined): Promise<ModelInfo[]> {
