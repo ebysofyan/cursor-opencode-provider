@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, join } from "node:path"
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import { applyEdits, modify, parse } from "jsonc-parser"
+import { opencodeConfigFileNames, opencodeGlobalConfigDir, opencodeGlobalConfigDirs } from "../context/paths.js"
 import { CURSOR_PROVIDER_ID } from "../shared.js"
 import type { ModelInfo } from "../models.js"
 import {
@@ -16,20 +16,24 @@ import {
  * do not flush into the live model picker (draft mutations stay invisible to `list()`).
  *
  * Fallback: surgically upsert discovered Cursor models into
- * `providers.cursor` inside `$OPENCODE_CONFIG_DIR/opencode.json(c)` using
- * `jsonc-parser` so comments and unrelated keys are preserved. Beta hosts with
- * `ctx.catalog` never need this path.
+ * `providers.cursor` inside the host global config (`$OPENCODE_CONFIG_DIR`,
+ * then the path-bridge global config dir, then native `~/.config/opencode`)
+ * using `jsonc-parser` so comments and unrelated keys are preserved. Beta
+ * hosts with `ctx.catalog` never need this path.
  *
  * Safety: parse failure → fail closed (no write). Never rewrite the whole
- * document via `JSON.stringify`.
+ * document via `JSON.stringify`. A `providers.cursor` block owned by another
+ * package/integration is left untouched.
  */
+
+export type ConfigCatalogSyncSkip = "parse_error" | "unchanged" | "unowned"
 
 export type ConfigCatalogSyncResult = {
   path: string
   modelCount: number
   changed: boolean
   /** Why a write was skipped (when `changed` is false for a non-idempotent reason). */
-  skipped?: "parse_error" | "unchanged"
+  skipped?: ConfigCatalogSyncSkip
 }
 
 export type StableDomainReloads = {
@@ -42,15 +46,63 @@ export type StableDomainReloadOptions = {
 }
 
 function configDir(): string {
-  return process.env.OPENCODE_CONFIG_DIR?.trim() || join(homedir(), ".config", "opencode")
+  const fromEnv = process.env.OPENCODE_CONFIG_DIR?.trim()
+  if (fromEnv) return fromEnv
+  return opencodeGlobalConfigDirs()[0] ?? opencodeGlobalConfigDir()
 }
 
 function resolveConfigPath(dir: string): string {
-  const jsonc = join(dir, "opencode.jsonc")
-  const json = join(dir, "opencode.json")
-  if (existsSync(jsonc)) return jsonc
-  if (existsSync(json)) return json
-  return jsonc
+  const names = opencodeConfigFileNames()
+  for (const name of names) {
+    const candidate = join(dir, name)
+    if (existsSync(candidate)) return candidate
+  }
+  return join(dir, names[0] ?? "opencode.jsonc")
+}
+
+function atomicWriteFile(path: string, contents: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
+  try {
+    writeFileSync(tmp, contents, "utf8")
+    renameSync(tmp, path)
+  } catch (error) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      // Best-effort cleanup of the temp file.
+    }
+    throw error
+  }
+}
+
+function isOurAisdkPackage(pkg: string): boolean {
+  if (pkg === CURSOR_AISDK_PACKAGE) return true
+  if (pkg === "aisdk:cursor-opencode-provider") return true
+  // Local `CURSOR_OPENCODE2_DEV_ENTRY` overrides, including a previous run's file:// spec.
+  return pkg.startsWith("aisdk:file://")
+}
+
+/**
+ * Whether `providers.cursor` is absent or already this plugin's identity.
+ * Legacy `provider.cursor` (OpenCode 1.x) is not an owner of the native block.
+ */
+export function isManagedCursorProvider(current: unknown): boolean {
+  if (current === undefined || current === null) return true
+  if (typeof current !== "object" || Array.isArray(current)) return false
+  const record = current as Record<string, unknown>
+  const pkg = record.package
+  if (typeof pkg === "string" && pkg.length > 0 && !isOurAisdkPackage(pkg)) return false
+  const integrationID = record.integrationID
+  if (typeof integrationID === "string" && integrationID.length > 0 && integrationID !== CURSOR_INTEGRATION_ID) {
+    return false
+  }
+  return true
+}
+
+/** Parse errors must retry; unowned/unchanged skips are terminal for this process. */
+export function stableModelsPublished(result: ConfigCatalogSyncResult): boolean {
+  return result.skipped !== "parse_error"
 }
 
 function buildCursorProvider(models: ModelInfo[]) {
@@ -76,10 +128,8 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
   const formatting = { insertSpaces: true, tabSize: 2, keepLines: true as const }
 
   if (!existsSync(path)) {
-    mkdirSync(dirname(path), { recursive: true })
-    // New file: nothing to preserve. Prefer `.jsonc` when that is the resolved path.
     const doc = { providers: { [CURSOR_PROVIDER_ID]: nextProvider } }
-    writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`, "utf8")
+    atomicWriteFile(path, `${JSON.stringify(doc, null, 2)}\n`)
     return { path, modelCount, changed: true }
   }
 
@@ -99,15 +149,16 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
     doc.providers && typeof doc.providers === "object" && !Array.isArray(doc.providers)
       ? (doc.providers as Record<string, unknown>)
       : {}
-  const legacyProvider =
-    doc.provider && typeof doc.provider === "object" && !Array.isArray(doc.provider)
-      ? (doc.provider as Record<string, unknown>)
-      : {}
 
-  const currentProvider = providers[CURSOR_PROVIDER_ID] ?? legacyProvider[CURSOR_PROVIDER_ID]
+  const hasPreferredProvider = Object.prototype.hasOwnProperty.call(providers, CURSOR_PROVIDER_ID)
+  const currentPreferred = hasPreferredProvider ? providers[CURSOR_PROVIDER_ID] : undefined
+  if (!isManagedCursorProvider(currentPreferred)) {
+    return { path, modelCount, changed: false, skipped: "unowned" }
+  }
+
   const currentManaged =
-    currentProvider && typeof currentProvider === "object" && !Array.isArray(currentProvider)
-      ? (currentProvider as Record<string, unknown>)
+    currentPreferred && typeof currentPreferred === "object" && !Array.isArray(currentPreferred)
+      ? (currentPreferred as Record<string, unknown>)
       : undefined
   const prev = JSON.stringify({
     name: currentManaged?.name,
@@ -121,7 +172,6 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
     integrationID: nextProvider.integrationID,
     models: nextProvider.models,
   })
-  const hasPreferredProvider = Object.prototype.hasOwnProperty.call(providers, CURSOR_PROVIDER_ID)
 
   if (hasPreferredProvider && prev === next) {
     return { path, modelCount, changed: false, skipped: "unchanged" }
@@ -143,7 +193,7 @@ export function syncCursorProvidersConfig(models: ModelInfo[]): ConfigCatalogSyn
     return { path, modelCount, changed: false, skipped: "unchanged" }
   }
 
-  writeFileSync(path, edited.endsWith("\n") ? edited : `${edited}\n`, "utf8")
+  atomicWriteFile(path, edited.endsWith("\n") ? edited : `${edited}\n`)
   return { path, modelCount, changed: true }
 }
 

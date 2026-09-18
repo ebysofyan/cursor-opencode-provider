@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { parse as parseJsonc } from "jsonc-parser"
 import {
   hasCatalogDomain,
+  isManagedCursorProvider,
+  stableModelsPublished,
   syncCursorProvidersConfig,
 } from "../src/opencode2/config-catalog.js"
 import {
@@ -14,6 +16,7 @@ import {
 } from "../src/opencode2/catalog.js"
 import { modelsToConfig } from "../src/model-config.js"
 import { CURSOR_WIRE_MODEL_ID_KEY, type ModelInfo } from "../src/models.js"
+import { HOST_PATH_BRIDGE } from "../src/context/paths.js"
 
 const sampleModels: ModelInfo[] = [
   {
@@ -151,7 +154,7 @@ describe("modelConfigEntryToInfo / catalog parity", () => {
       applyCursorModels(draft, models)
 
       syncCursorProvidersConfig(models)
-      const stable = parseJsonc(readFileSync(join(dir, "opencode.jsonc"), "utf8")) as any
+      const stable = parseJsonc(readFileSync(join(dir, "opencode.json"), "utf8")) as any
       const stableModel = stable.providers.cursor.models["claude-sonnet-4-5-1m"]
       const betaModel = betaModels.get("claude-sonnet-4-5-1m")
 
@@ -381,7 +384,7 @@ describe("syncCursorProvidersConfig", () => {
 
   test("creates config when missing under OPENCODE_CONFIG_DIR", () => {
     withConfigDir((dir) => {
-      const path = join(dir, "opencode.jsonc")
+      const path = join(dir, "opencode.json")
       expect(existsSync(path)).toBe(false)
       const result = syncCursorProvidersConfig(sampleModels)
       expect(result.changed).toBe(true)
@@ -389,5 +392,133 @@ describe("syncCursorProvidersConfig", () => {
       const doc = JSON.parse(readFileSync(path, "utf8"))
       expect(doc.providers.cursor.models["composer-2.5"]).toBeTruthy()
     })
+  })
+
+  test("skips a providers.cursor block owned by another package", () => {
+    withConfigDir((dir) => {
+      const path = join(dir, "opencode.jsonc")
+      const raw = `{
+  "providers": {
+    "cursor": {
+      "package": "aisdk:some-other-provider",
+      "name": "Other",
+      "models": { "only-theirs": { "id": "only-theirs" } }
+    }
+  }
+}
+`
+      writeFileSync(path, raw)
+      const result = syncCursorProvidersConfig(sampleModels)
+      expect(result.changed).toBe(false)
+      expect(result.skipped).toBe("unowned")
+      expect(readFileSync(path, "utf8")).toBe(raw)
+    })
+  })
+
+  test("skips a providers.cursor block with a foreign integrationID", () => {
+    withConfigDir((dir) => {
+      const path = join(dir, "opencode.jsonc")
+      const raw = `{
+  "providers": {
+    "cursor": {
+      "integrationID": "not-cursor",
+      "models": { "only-theirs": { "id": "only-theirs" } }
+    }
+  }
+}
+`
+      writeFileSync(path, raw)
+      const result = syncCursorProvidersConfig(sampleModels)
+      expect(result.changed).toBe(false)
+      expect(result.skipped).toBe("unowned")
+      expect(readFileSync(path, "utf8")).toBe(raw)
+    })
+  })
+
+  test("prefers an existing opencode.json when both json and jsonc exist", () => {
+    withConfigDir((dir) => {
+      const json = join(dir, "opencode.json")
+      const jsonc = join(dir, "opencode.jsonc")
+      writeFileSync(json, JSON.stringify({ model: "from-json" }, null, 2) + "\n")
+      writeFileSync(jsonc, JSON.stringify({ model: "from-jsonc" }, null, 2) + "\n")
+      const result = syncCursorProvidersConfig(sampleModels)
+      expect(result.changed).toBe(true)
+      expect(result.path).toBe(json)
+      const jsonDoc = JSON.parse(readFileSync(json, "utf8"))
+      const jsoncDoc = JSON.parse(readFileSync(jsonc, "utf8"))
+      expect(jsonDoc.model).toBe("from-json")
+      expect(jsonDoc.providers.cursor.models["composer-2.5"]).toBeTruthy()
+      expect(jsoncDoc).toEqual({ model: "from-jsonc" })
+    })
+  })
+
+  test("writes the path-bridge global config dir when OPENCODE_CONFIG_DIR is unset", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cursor-oc2-bridge-cfg-"))
+    const prevEnv = process.env.OPENCODE_CONFIG_DIR
+    delete process.env.OPENCODE_CONFIG_DIR
+    const previousBridge = (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE]
+    ;(globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE] = {
+      projectConfigDirs: () => [],
+      globalConfigDirs: () => [dir],
+      configFileNames: ["host.json", "opencode.jsonc"],
+    }
+    try {
+      const result = syncCursorProvidersConfig(sampleModels)
+      expect(result.changed).toBe(true)
+      expect(result.path).toBe(join(dir, "host.json"))
+      const doc = JSON.parse(readFileSync(join(dir, "host.json"), "utf8"))
+      expect(doc.providers.cursor.models["composer-2.5"]).toBeTruthy()
+    } finally {
+      if (prevEnv === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = prevEnv
+      if (previousBridge === undefined) delete (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE]
+      else (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE] = previousBridge
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("OPENCODE_CONFIG_DIR wins over the path bridge", () => {
+    const envDir = mkdtempSync(join(tmpdir(), "cursor-oc2-env-cfg-"))
+    const bridgeDir = mkdtempSync(join(tmpdir(), "cursor-oc2-bridge-ignored-"))
+    const prevEnv = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = envDir
+    const previousBridge = (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE]
+    ;(globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE] = {
+      projectConfigDirs: () => [],
+      globalConfigDirs: () => [bridgeDir],
+    }
+    try {
+      const result = syncCursorProvidersConfig(sampleModels)
+      expect(result.changed).toBe(true)
+      expect(result.path.startsWith(envDir)).toBe(true)
+      expect(existsSync(join(bridgeDir, "opencode.jsonc"))).toBe(false)
+      expect(existsSync(join(bridgeDir, "opencode.json"))).toBe(false)
+    } finally {
+      if (prevEnv === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = prevEnv
+      if (previousBridge === undefined) delete (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE]
+      else (globalThis as Record<PropertyKey, unknown>)[HOST_PATH_BRIDGE] = previousBridge
+      rmSync(envDir, { recursive: true, force: true })
+      rmSync(bridgeDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("stableModelsPublished / isManagedCursorProvider", () => {
+  test("parse errors are retryable; other skips are not", () => {
+    expect(stableModelsPublished({ path: "x", modelCount: 1, changed: false, skipped: "parse_error" })).toBe(false)
+    expect(stableModelsPublished({ path: "x", modelCount: 1, changed: false, skipped: "unchanged" })).toBe(true)
+    expect(stableModelsPublished({ path: "x", modelCount: 1, changed: false, skipped: "unowned" })).toBe(true)
+    expect(stableModelsPublished({ path: "x", modelCount: 1, changed: true })).toBe(true)
+  })
+
+  test("treats absent or our identity as managed", () => {
+    expect(isManagedCursorProvider(undefined)).toBe(true)
+    expect(isManagedCursorProvider({ customHeaders: { a: "b" } })).toBe(true)
+    expect(isManagedCursorProvider({ package: "aisdk:cursor-opencode-provider" })).toBe(true)
+    expect(isManagedCursorProvider({ package: "aisdk:file:///tmp/dist/index.js" })).toBe(true)
+    expect(isManagedCursorProvider({ integrationID: "cursor" })).toBe(true)
+    expect(isManagedCursorProvider({ package: "aisdk:someone-else" })).toBe(false)
+    expect(isManagedCursorProvider({ integrationID: "other" })).toBe(false)
   })
 })

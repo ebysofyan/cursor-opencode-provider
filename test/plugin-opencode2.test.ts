@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import plugin from "../src/plugin-opencode2.js"
@@ -443,6 +443,40 @@ describe("opencode2 setup", () => {
 
       expect(registered).not.toContain("catalog.transform")
       expect(reloads).toEqual(["provider", "model"])
+      const synced = JSON.parse(readFileSync(join(configDir, "opencode.json"), "utf8"))
+      expect(synced.providers.cursor.package).toContain("aisdk:")
+      expect(synced.providers.cursor.integrationID).toBe("cursor")
+      expect(synced.providers.cursor.models[baseModel.id]).toBeTruthy()
+      expect(synced.providers.cursor.models[baseModel.id].providerID).toBe("cursor")
+      await cleanup()
+    } finally {
+      setHostCacheDirOverride(undefined)
+      if (previousConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = previousConfigDir
+      rmSync(configDir, { recursive: true, force: true })
+      rmSync(cacheDir, { recursive: true, force: true })
+    }
+  })
+
+  test("stable setup leaves a malformed config untouched", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "cursor-oc2-plugin-broken-"))
+    const cacheDir = mkdtempSync(join(tmpdir(), "cursor-oc2-plugin-cache-"))
+    const previousConfigDir = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = configDir
+    setHostCacheDirOverride(cacheDir)
+    const broken = "{\n  model: not-json\n"
+    const path = join(configDir, "opencode.json")
+    writeFileSync(path, broken)
+    try {
+      await writeCache(cacheDir, {
+        models: [baseModel],
+        fetchedAt: Date.now(),
+        schemaVersion: MODEL_CACHE_SCHEMA_VERSION,
+      })
+      const { ctx } = fakeContext()
+      delete ctx.catalog
+      const cleanup = await plugin.setup(ctx)
+      expect(readFileSync(path, "utf8")).toBe(broken)
       await cleanup()
     } finally {
       setHostCacheDirOverride(undefined)

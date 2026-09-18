@@ -21,6 +21,7 @@ import {
 import { applyCursorModels, applyCursorProvider } from "./opencode2/catalog.js"
 import {
   hasCatalogDomain,
+  stableModelsPublished,
   syncCursorProvidersConfigAndReload,
 } from "./opencode2/config-catalog.js"
 import { applyCursorIntegration, resolveCursorAccessToken } from "./opencode2/integration.js"
@@ -116,7 +117,7 @@ const plugin: Plugin2 = {
 
     // ── Catalog (beta) or config providers sync (stable 2.0.5) ───────────────
     // Beta: transform replays on catalog.reload().
-    // Stable: no ctx.catalog — persist providers.cursor into OPENCODE_CONFIG_DIR.
+    // Stable: no ctx.catalog — persist providers.cursor into the host config dir.
     if (useCatalog && ctx.catalog) {
       await track(
         ctx.catalog.transform((draft) => {
@@ -131,10 +132,11 @@ const plugin: Plugin2 = {
         const cached = await readCache(cacheDir)
         if (cached?.models?.length) {
           models = cached.models
-          await syncCursorProvidersConfigAndReload(models, {
+          const seeded = await syncCursorProvidersConfigAndReload(models, {
             provider: () => ctx.provider?.reload?.(),
             model: () => ctx.model?.reload?.(),
           })
+          if (!stableModelsPublished(seeded)) stableReloadPending = true
         }
       } catch {
         stableReloadPending = true
@@ -149,10 +151,14 @@ const plugin: Plugin2 = {
         return true
       }
       try {
-        await syncCursorProvidersConfigAndReload(next, {
+        const result = await syncCursorProvidersConfigAndReload(next, {
           provider: () => ctx.provider?.reload?.(),
           model: () => ctx.model?.reload?.(),
         }, { forceReload: stableReloadPending })
+        if (!stableModelsPublished(result)) {
+          stableReloadPending = true
+          return false
+        }
         stableReloadPending = false
         return true
       } catch {
