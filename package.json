@@ -1,6 +1,6 @@
 {
   "name": "cursor-opencode-provider",
-  "version": "0.6.9",
+  "version": "0.6.8",
   "description": "Use Cursor subscription models from OpenCode via Cursor's Connect-RPC agent protocol",
   "type": "module",
   "license": "MIT",
@@ -81,6 +81,7 @@
   },
   "dependencies": {
     "@ai-sdk/provider": "3.0.15",
+    "jsonc-parser": "^3.3.1",
     "protobufjs": "^7.6.5"
   },
   "peerDependencies": {

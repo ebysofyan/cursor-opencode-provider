@@ -128,37 +128,45 @@ Local clone equivalent: `"file:///absolute/path/to/cursor-opencode-provider/dist
 
 That entry registers the provider via `ctx.aisdk.sdk` / `ctx.aisdk.language`. Keep the classic `plugin` entry for auth **and** plugin tools (notably `cursor_image_save` / `custom_websearch`): the 1.18 `/v2/promise` API has no `tool` domain, so a v2-only load silently disables Cursor image generation.
 
-### OpenCode 2.0 stable (`2.0.5+`) — fork compat
-
-Stable OpenCode 2.0 builds (e.g. `2.0.5` / `2.0.6`) expose `ctx.provider` /
-`ctx.model` but **not** `ctx.catalog`. This fork detects that and syncs
-discovered Cursor models into `providers.cursor` in
-`$OPENCODE_CONFIG_DIR/opencode.json(c)` so the picker still works, while
-keeping the beta `ctx.catalog.transform` path when catalog is present.
-
-Load the OC2 entry via symlink (npm subpath resolution is unreliable on OC2):
-
-```bash
-ln -sfn /path/to/cursor-opencode-provider/dist/plugin-opencode2.js \
-        ~/.config/opencode2/plugins/cursor.js
-# local aisdk build:
-export CURSOR_OPENCODE2_DEV_ENTRY=/path/to/cursor-opencode-provider/dist/index.js
-opencode2 service restart
-```
-
-Classic OpenCode 1.x continues to use `"plugin": ["cursor-opencode-provider"]`
-(or `./plugin` / `./plugin/v2`) unchanged.
-
-### OpenCode 2.0 beta (`opencode2`)
+### OpenCode 2.0 (`opencode2`)
 
 OpenCode 2.0 uses a different plugin API from the 1.18 `/v2/promise` one above — they
-are source-incompatible, so this package ships a **separate** entrypoint for it.
-Everything is registered by that one plugin. You do **not** need a `providers` entry,
-and there is no `enabled` flag. Do not also load `./plugin/v2` or the classic `plugin`
-entry under `opencode2`; they target the older APIs.
+are source-incompatible, so this package ships a **separate** entrypoint for it
+(`plugin/opencode2`). Everything is registered by that one plugin. You do **not**
+need a hand-written `providers` entry, and there is no `enabled` flag. Do not also
+load `./plugin/v2` or the classic `plugin` entry under `opencode2`; they target the
+older APIs.
 
 Authenticate with `/connect` inside `opencode2`, choose **Cursor**, then either
 browser login or an API key. `CURSOR_API_KEY` is also picked up automatically.
+
+**Stable vs beta (dual path):**
+
+| Host | Surface | How models register |
+|------|---------|---------------------|
+| OpenCode 2.0 **beta** (has `ctx.catalog`) | `ctx.catalog.transform` | In-memory catalog upsert |
+| OpenCode 2.0 **stable** (`2.0.5` / `2.0.6`, no `ctx.catalog`) | `providers.cursor` in `$OPENCODE_CONFIG_DIR/opencode.json(c)` | Surgical JSONC upsert after discovery |
+
+Stable hosts expose `ctx.provider` / `ctx.model` / `ctx.aisdk`, but draft mutations
+there do not flush into the live picker. The plugin therefore syncs the **same**
+model metadata as the beta catalog path (`variants`, `cost`, limits, modalities,
+wire `modelID` / settings) into `providers.cursor` — and only that block. Parse
+failures fail closed (no rewrite). Classic OpenCode 1.x is unchanged.
+
+When using a dedicated config dir (common for the `opencode2` CLI):
+
+```bash
+export OPENCODE_CONFIG_DIR=~/.config/opencode2
+# optional local aisdk build:
+export CURSOR_OPENCODE2_DEV_ENTRY=/path/to/cursor-opencode-provider/dist/index.js
+```
+
+If npm subpath resolution is unreliable on your OC2 build, symlink the entry:
+
+```bash
+ln -sfn /path/to/cursor-opencode-provider/dist/plugin-opencode2.js \
+        "$OPENCODE_CONFIG_DIR/plugins/cursor.js"
+```
 
 #### From npm
 

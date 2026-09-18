@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url"
 import { CURSOR_PROVIDER_ID } from "../shared.js"
 import { CURSOR_WIRE_MODEL_ID_KEY, type ModelInfo } from "../models.js"
 import { modelsToConfig } from "../model-config.js"
-import { toOpenCode2Costs, type OpenCodeModelCost } from "../pricing.js"
+import { toOpenCode2Costs, type OpenCode2ModelCost, type OpenCodeModelCost } from "../pricing.js"
 import type { CatalogDraft, ModelVariantInfo } from "./types.js"
 
 /**
@@ -37,20 +37,33 @@ export const CURSOR_AISDK_PACKAGE = process.env.CURSOR_OPENCODE2_DEV_ENTRY
   ? `aisdk:${pathToFileURL(process.env.CURSOR_OPENCODE2_DEV_ENTRY).href}`
   : "aisdk:cursor-opencode-provider"
 
-/** Register (or update) the Cursor provider entry. `update` is an upsert. */
-export function applyCursorProvider(draft: CatalogDraft): void {
-  draft.provider.update(CURSOR_PROVIDER_ID, (provider) => {
-    provider.id = CURSOR_PROVIDER_ID
-    provider.name = "Cursor"
-    provider.package = CURSOR_AISDK_PACKAGE
-    // Links the provider to the integration that stores its credentials, so
-    // `connection.active(...)` resolves the token the user set up via /connect.
-    provider.integrationID = CURSOR_INTEGRATION_ID
-  })
+/**
+ * Plain-object `Model.Info` equivalent used by both `ctx.catalog` (beta) and
+ * `providers.cursor.models` config sync (stable). Keep one translator so the
+ * surfaces cannot drift.
+ */
+export type CatalogModelInfo = {
+  name: string
+  modelID: string
+  capabilities: {
+    tools: boolean
+    input: string[]
+    output: string[]
+  }
+  limit: {
+    context: number
+    output: number
+  }
+  variants: ModelVariantInfo[]
+  status: "active"
+  enabled: true
+  time: { released: number }
+  cost: OpenCode2ModelCost[]
+  settings?: Record<string, unknown>
 }
 
 /** Translate one `modelsToConfig` entry into the 2.0 `Model.Info` shape. */
-function applyModelEntry(draft: CatalogDraft, id: string, entry: Record<string, any>): void {
+export function modelConfigEntryToInfo(id: string, entry: Record<string, any>): CatalogModelInfo {
   const options = entry.options as Record<string, unknown> | undefined
   // Long-context and Fast entries get synthetic OpenCode ids (`<id>-1m`,
   // `<id>-fast`, `<id>-1m-fast`) while still addressing the same Cursor model
@@ -65,31 +78,72 @@ function applyModelEntry(draft: CatalogDraft, id: string, entry: Record<string, 
     (entry.variants ?? {}) as Record<string, Record<string, unknown>>,
   ).map(([variantId, settings]) => ({ id: variantId, settings: { ...settings } }))
 
-  draft.model.update(CURSOR_PROVIDER_ID, id, (model) => {
-    model.id = id
-    model.modelID = wireId
-    model.providerID = CURSOR_PROVIDER_ID
-    model.name = entry.name
-    const inputModalities = Array.isArray(entry.modalities?.input)
-      ? entry.modalities.input.filter((modality: unknown): modality is string => typeof modality === "string")
-      : ["text"]
-    const outputModalities = Array.isArray(entry.modalities?.output)
-      ? entry.modalities.output.filter((modality: unknown): modality is string => typeof modality === "string")
-      : ["text"]
-    model.capabilities = {
+  const inputModalities = Array.isArray(entry.modalities?.input)
+    ? entry.modalities.input.filter((modality: unknown): modality is string => typeof modality === "string")
+    : ["text"]
+  const outputModalities = Array.isArray(entry.modalities?.output)
+    ? entry.modalities.output.filter((modality: unknown): modality is string => typeof modality === "string")
+    : ["text"]
+
+  const info: CatalogModelInfo = {
+    name: entry.name ?? id,
+    modelID: wireId,
+    capabilities: {
       tools: entry.tool_call !== false,
       input: inputModalities,
       output: outputModalities,
-    }
-    model.limit = { context: entry.limit.context, output: entry.limit.output }
-    model.variants = variants
-    model.status = "active"
-    model.enabled = true
-    model.time = { released: 0 }
-    model.cost = toOpenCode2Costs(entry.cost as OpenCodeModelCost | undefined)
-    // Carries the default variant parameters (and the wire id) through to
-    // doStream as provider options, matching the classic plugin.
-    if (options) model.settings = { ...options }
+    },
+    limit: {
+      context: entry.limit?.context ?? 200_000,
+      output: entry.limit?.output ?? 8192,
+    },
+    variants,
+    status: "active",
+    enabled: true,
+    time: { released: 0 },
+    cost: toOpenCode2Costs(entry.cost as OpenCodeModelCost | undefined),
+  }
+  if (options) info.settings = { ...options }
+  return info
+}
+
+/** Full model map for catalog draft *or* `providers.cursor.models` config. */
+export function modelsToCatalogModelMap(models: ModelInfo[]): Record<string, CatalogModelInfo> {
+  const config = modelsToConfig(models)
+  const out: Record<string, CatalogModelInfo> = {}
+  for (const [id, entry] of Object.entries(config)) {
+    out[id] = modelConfigEntryToInfo(id, entry as Record<string, any>)
+  }
+  return out
+}
+
+/** Register (or update) the Cursor provider entry. `update` is an upsert. */
+export function applyCursorProvider(draft: CatalogDraft): void {
+  draft.provider.update(CURSOR_PROVIDER_ID, (provider) => {
+    provider.id = CURSOR_PROVIDER_ID
+    provider.name = "Cursor"
+    provider.package = CURSOR_AISDK_PACKAGE
+    // Links the provider to the integration that stores its credentials, so
+    // `connection.active(...)` resolves the token the user set up via /connect.
+    provider.integrationID = CURSOR_INTEGRATION_ID
+  })
+}
+
+function applyModelEntry(draft: CatalogDraft, id: string, entry: Record<string, any>): void {
+  const info = modelConfigEntryToInfo(id, entry)
+  draft.model.update(CURSOR_PROVIDER_ID, id, (model) => {
+    model.id = id
+    model.modelID = info.modelID
+    model.providerID = CURSOR_PROVIDER_ID
+    model.name = info.name
+    model.capabilities = info.capabilities
+    model.limit = info.limit
+    model.variants = info.variants
+    model.status = info.status
+    model.enabled = info.enabled
+    model.time = info.time
+    model.cost = info.cost
+    if (info.settings) model.settings = { ...info.settings }
   })
 }
 
