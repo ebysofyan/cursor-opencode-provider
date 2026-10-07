@@ -155,6 +155,11 @@ host-neutral workspace facts:
   server instructions, env) plus this provider's interaction guidance.
 - Env, git, repository, and project layout
 - Host `task` / `subagent` names and descriptions as `custom_subagents`
+- OpenCode 2 skills that have a file as `agent_skills` (`SKILL.md` path and
+  description, never content): the skills the frozen rule's catalog lists, with
+  files from the plugin's `skill.list()` (`context/host-skills.ts`). Derived on
+  every materialization and never kept on the frozen base, so the list stays
+  byte-stable for the epoch; Cursor tells the model to read the file.
 - Advertised host tools as names-only `mcp_meta_tool_options` (full definitions
   only on exec #36)
 - Plugin lines in `hooks_additional_context` via `collectPlugins`
