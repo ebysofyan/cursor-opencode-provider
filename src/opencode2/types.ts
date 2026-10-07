@@ -416,8 +416,6 @@ export type McpDomain = {
   readonly transform: Transform<McpEditor>
 }
 
-// ── Skills ──
-
 /** Only the fields this plugin reads from a registered skill. */
 export type SkillInfo = {
   readonly id: string
@@ -425,7 +423,10 @@ export type SkillInfo = {
 }
 
 export type SkillDomain = {
-  readonly list: () => Promise<{ readonly data: readonly SkillInfo[] }>
+  readonly list: () => Promise<{
+    readonly location: { readonly directory: string }
+    readonly data: readonly SkillInfo[]
+  }>
 }
 
 export type PluginLocation = {
