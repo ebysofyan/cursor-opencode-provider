@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Cursor models see host skills the way Cursor presents them: RequestContext `agent_skills` with each skill's file path and description (no content), so matching skills can be loaded by reading the file when the host advertises `skill` ([#62](https://github.com/oakimov/cursor-opencode-provider/pull/62) by [@nkoynov](https://github.com/nkoynov))
+
 ### Changed
 
 - CreatePlan writes plans where OpenCode keeps them: the session's own plan file on OpenCode 1.x (`.opencode/plans/` in a git project, otherwise the data `plans/` folder) and the Plan directory (`~/.opencode/plan`) on OpenCode 2.0, instead of a provider-chosen folder
@@ -12,6 +16,14 @@
 
 ### Fixed
 
+- Canceling a response with no pending tools closes the Cursor Run after its active pump stops, instead of leaving the stream and heartbeat open; tool-result continuations still retain their Run
+- Tool-less title and summary Runs advertise an empty tool catalog (matching OpenCode's host-empty title/compaction Sends) instead of re-advertising the sticky set, so Cursor is not tempted to call tools on those turns
+- Cache diagnosis labels zero cache-read counters on CreatePlan/SwitchMode turns without inferring cache hits from context size
+- Skill locations containing HTML special characters load correctly on OpenCode 1; OpenCode 2 skill catalogs stay scoped to their own project, and structural skill lookups receive the owning session ID
+- Cold-start tool-less requests finish without waiting for a sibling tool catalog; titles and summaries containing words such as "unavailable" retain their answer
+- Malformed todo lists and question options remain subject to validation instead of silently clearing tasks or inventing choices
+- `todowrite` calls that omit `priority` (Cursor TodoWrite shape) get OpenCode's required defaults before host validation, so todo updates no longer fail with `Missing key … ["priority"]`
+- `question` calls that omit `header` get a short label from the question text before host validation, so prompts no longer fail with `Missing key … ["header"]`
 - Dynamic-catalog guidance names the namespace for host tools (`opencode`) and states that `cursor` holds only Cursor's built-in tools, so a first `skill` lookup no longer fails in the wrong namespace.
 - A SwitchMode handoff that starts a new host plan turn explicitly terminates the old Cursor Run before the host switch, preserving its checkpoint and preventing premature CreatePlan calls. Native planning guidance distinguishes direct functions from dynamic discovery; debug logs retain native discovery errors.
 - Dynamic tool definitions carry their exact invocation identity and complete outer envelope beside the inner argument schema, so discovery and shortened search results retain required outer call fields.
@@ -24,7 +36,7 @@
 - OpenCode 2.0 saves Cursor-generated images through `cursor_image_save` instead of refusing the binary write
 - On OpenCode 2.0, an approved plan starts implementing and plans land in the Plan directory even after the plugin is set up for several locations or reloaded; before, disposing an older setup removed the newer one's agent switch and the session stopped after approval
 - Assistant text before and after a tool call or plan review is separated into paragraphs instead of running together, so a shown plan's heading renders
-- Session titles and summaries contain only the model's answer, not its narration before tools it could not use
+- Session titles and summaries contain only the model's answer, not its narration before refused tools or refusal-shaped text after a lifecycle refuse
 - A new message that arrives with a plan approval or plan-mode switch no longer discards the Cursor turn that raised it, and one that arrives while Cursor is still answering no longer waits for that unseen answer before starting over
 - A new message sent while a plan review, question, or mode switch is still open declines it instead of leaving the earlier Cursor run open
 - A pending tool result in a new message reaches its Cursor run before helper detection, so the conversation is kept even when the tool catalog shrank

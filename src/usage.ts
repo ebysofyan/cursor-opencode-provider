@@ -210,6 +210,14 @@ export function formatCursorCacheDiagnostics(
         && toolsDelta !== 0
         ? "client-overlay-changed"
         : "none"
+  // Occupancy measures context size, not cache reuse. A zero counter on an
+  // interaction turn cannot distinguish omitted accounting from a cache miss.
+  const interactionZeroRead =
+    stats.startedWithCheckpoint
+    && rawRead === 0
+    && typeof prior?.usedTokens === "number"
+    && prior.usedTokens > 0
+    && (stats.createPlanInTurn === true || stats.switchModeInTurn === true)
 
   return [
     "cache diagnosis:",
@@ -243,6 +251,12 @@ export function formatCursorCacheDiagnostics(
     `execRequests=${stats.execRequests}`,
     `createPlanInTurn=${stats.createPlanInTurn === true}`,
     `switchModeInTurn=${stats.switchModeInTurn === true}`,
+    ...(interactionZeroRead
+      ? [
+          "turnEndedCacheRead=zero-interaction",
+          "cacheReuseEvidence=unavailable",
+        ]
+      : []),
     "perModelCallCache=unavailable",
   ].join(" ")
 }

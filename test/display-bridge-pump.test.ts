@@ -366,6 +366,25 @@ describe("display-only ToolCall pump bridge", () => {
       .toBeLessThan(parts.findIndex((part) => part.type === "finish"))
   })
 
+  it("preserves a tool-less answer about unavailable resources after refusing an exec", async () => {
+    const parts: any[] = []
+    const answer = "Fix unavailable skills after restart"
+    const session = fakeSession([
+      encodeMessage("AgentServerMessage", {
+        exec_server_message: { id: 1, read_args: { path: "/tmp/guide.md", tool_call_id: "read-1" } },
+      }),
+      encodeMessage("AgentServerMessage", { interaction_update: { text_delta: { text: answer } } }),
+      turnEndedPayload(),
+    ], [])
+    session.allowTools = false
+    const controller = {
+      enqueue(part: unknown) { parts.push(part) },
+      error(error: Error) { throw error },
+    } as unknown as ReadableStreamDefaultController<any>
+    await pump(session, controller, { textId: "text", reasoningId: "reasoning" })
+    expect(parts.filter((part) => part.type === "text-delta").map((part) => part.delta).join("")).toBe(answer)
+  })
+
   it("continues a new-file edit through write instead of shell fallback", async () => {
     const writes: Uint8Array[] = []
     const parts: any[] = []

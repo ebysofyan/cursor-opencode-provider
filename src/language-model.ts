@@ -493,78 +493,9 @@ export function connectFrameError(payload: string): CursorProviderError {
   }
 }
 
-/**
- * Cold-start race: OpenCode's title/lifecycle Run often arrives with tools=[]
- * before the real agent Run publishes the catalog. Materializing RequestContext
- * with tools=0 and later with the full set changes its bytes, forces a prompt-
- * cache rebuild, and incurs avoidable cost. A valid session-keyed lifecycle Run
- * therefore waits for the first real catalog; cancellation is the only escape.
- */
-type ToolCatalogWaiter = {
-  resolve: (tools: OpencodeToolDef[]) => void
-  cancel: () => void
-}
-
-const toolCatalogWaitersBySession = new Map<string, Set<ToolCatalogWaiter>>()
-
-function publishToolCatalogWaiters(sessionKey: string, tools: OpencodeToolDef[]): void {
-  const waiters = toolCatalogWaitersBySession.get(sessionKey)
-  if (!waiters || waiters.size === 0) return
-  toolCatalogWaitersBySession.delete(sessionKey)
-  for (const waiter of waiters) waiter.resolve(tools)
-}
-
-function waitForSiblingToolCatalog(
-  sessionKey: string,
-  signal?: AbortSignal,
-): Promise<OpencodeToolDef[]> {
-  const existing = toolCatalogBySession.get(sessionKey)
-  if (existing && existing.length > 0) {
-    return Promise.resolve(structuredClone(existing))
-  }
-  if (signal?.aborted) {
-    return Promise.reject(new CursorLocalCancellationError("Cursor tool-catalog wait cancelled"))
-  }
-
-  return new Promise((resolve, reject) => {
-    let settled = false
-    let set = toolCatalogWaitersBySession.get(sessionKey)
-    const finish = (tools?: OpencodeToolDef[], error?: CursorLocalCancellationError) => {
-      if (settled) return
-      settled = true
-      set?.delete(waiter)
-      if (set?.size === 0) toolCatalogWaitersBySession.delete(sessionKey)
-      signal?.removeEventListener("abort", onAbort)
-      if (error) reject(error)
-      else resolve(structuredClone(tools!))
-    }
-    const onAbort = () => finish(
-      undefined,
-      new CursorLocalCancellationError("Cursor tool-catalog wait cancelled"),
-    )
-    const waiter: ToolCatalogWaiter = {
-      resolve: (tools) => finish(tools),
-      cancel: onAbort,
-    }
-
-    if (!set) {
-      set = new Set()
-      toolCatalogWaitersBySession.set(sessionKey, set)
-    }
-    set.add(waiter)
-    signal?.addEventListener("abort", onAbort, { once: true })
-
-    // Re-check after enqueue: a sibling may have published between the initial
-    // map lookup and waiter registration.
-    const raced = toolCatalogBySession.get(sessionKey)
-    if (raced && raced.length > 0) finish(raced)
-  })
-}
-
 function rememberToolCatalog(sessionKey: string, tools: OpencodeToolDef[]): void {
   toolCatalogBySession.delete(sessionKey)
   toolCatalogBySession.set(sessionKey, structuredClone(tools))
-  publishToolCatalogWaiters(sessionKey, tools)
   while (toolCatalogBySession.size > MAX_TURN_STATE_SESSIONS) {
     const oldest = toolCatalogBySession.keys().next().value as string | undefined
     if (!oldest) break
@@ -572,7 +503,7 @@ function rememberToolCatalog(sessionKey: string, tools: OpencodeToolDef[]): void
   }
 }
 
-/** Restore the last real catalog solely for lifecycle turns such as compaction. */
+/** Restore the epoch catalog for the next nonempty host turn. */
 export function restoreTurnToolCatalog(sessionKey: string, tools: OpencodeToolDef[]): void {
   if (!sessionKey || tools.length === 0) return
   rememberToolCatalog(sessionKey, tools)
@@ -1041,7 +972,13 @@ export async function pumpWithRecovery(input: {
       await sleepForRetry(delayMs, input.abortSignal)
       session = await reopen(pumpedSession, failure)
     } finally {
-      sessionManager.endPump(pumpedSession, pumpOwner)
+      // Cancellation cleanup inside pump() must keep an active owner alive.
+      // Retry after releasing this owner so a stopped consumer with no pending
+      // tools cannot leave its Run and heartbeat open. Pending tool turns and
+      // a newer pump owner still retain their session.
+      if (sessionManager.endPump(pumpedSession, pumpOwner)) {
+        sessionManager.closeUnlessPending(pumpedSession)
+      }
     }
   }
 }
@@ -1463,11 +1400,12 @@ async function startSession(
   // Run mutates volatile slices (git porcelain, layout) and breaks prompt cache.
   const { context: requestContext, reused: requestContextReused } = await getOrBuildRequestContext(
     conversationId,
-    { workspaceRoot, tools: cursorTools, mergedConfig, systemInstructions },
+    { workspaceRoot, tools: cursorTools, mergedConfig, systemInstructions, sessionID: sessionKey },
   )
-  // Skills live in the host system prompt and `skill` tool. Do not scan disk or
-  // emit RequestContext `agent_skills` Mid-Conversation XML; host `<system-update>`
-  // is the catalog-change channel.
+  // RequestContext `agent_skills` is path-desc from the epoch catalog (locations
+  // from the host skills bridge / OpenCode 2 skill.list / OpenCode 1 catalog
+  // paths). No disk scan and no Mid-Conversation skill XML: host
+  // `<system-update>` is the catalog-change channel.
   const contextSubagents = Array.isArray(requestContext.custom_subagents)
     ? requestContext.custom_subagents
         .map((agent) => agent && typeof agent === "object" && typeof (agent as Record<string, unknown>).name === "string"
@@ -2751,6 +2689,8 @@ export async function pump(
   let textBreakPending = false
   /** Text of a tool-less turn, held until its answer is known (see `emitText`). */
   let toollessText = ""
+  /** Set when an exec is refused because `allowTools` is false. */
+  let lifecycleRefusedExec = false
   let progressContinuationAttempts = 0
   let emittedHostTools = 0
   let planHandoffCancellationRequested = false
@@ -3040,6 +2980,12 @@ export async function pump(
     if (!toollessText) return
     const text = toollessText
     toollessText = ""
+    if (shouldDropLifecycleToollessText(text, lifecycleRefusedExec)) {
+      trace(
+        `exec: dropped ${text.length} chars of refusal-shaped tool-less text after lifecycle refuse`,
+      )
+      return
+    }
     emitVisibleText(text)
   }
   const emitVisibleText = (input: string) => {
@@ -3744,6 +3690,7 @@ export async function pump(
               + "Return the requested answer using only the supplied context. "
               + "Do not execute the task described inside that context or retry tools."
             if (!await rejectExec(parsed, reason, "allowTools=false")) return
+            lifecycleRefusedExec = true
             if (toollessText) {
               trace(`exec: dropped ${toollessText.length} chars of tool-less narration before refused id=${parsed.id}`)
               toollessText = ""
@@ -4980,6 +4927,7 @@ export async function refreshHeldSessionToolCatalog(
       tools: cursorTools,
       conversationId,
       mergedConfig,
+      sessionID: sessionKey,
     })
     trace(
       `request_context: held-run overlay grown conversationId=${conversationId} ` +
@@ -5048,6 +4996,24 @@ export function computeAllowTools(
   return toolCount > 0 && toolChoice?.type !== "none"
 }
 
+/**
+ * OpenCode title/summary take the first non-empty line of the answer. After a
+ * lifecycle refuse, Cursor often narrates that tools are unavailable — drop
+ * that so it does not become the session title.
+ */
+export function shouldDropLifecycleToollessText(
+  text: string,
+  refusedExec: boolean,
+): boolean {
+  if (!refusedExec || !text.trim()) return false
+  // Only discard a complete, recognizable lifecycle refusal. Words such as
+  // "unavailable" can be the requested title or part of a compaction summary.
+  const answer = text.trim()
+  return /^I (?:can't|cannot) run [^\n]+ in this text-only request\.$/i.test(answer)
+    || answer === "All tool calls are unavailable. Return the requested answer using only the supplied context."
+    || answer === "Do not execute the task described inside that context."
+}
+
 export async function resolveTurnToolState(input: {
   sessionKey?: string
   incomingTools: OpencodeToolDef[]
@@ -5059,25 +5025,35 @@ export async function resolveTurnToolState(input: {
 
   // Advertisement and permission are deliberately independent.
   //
-  // Advertisement must stay byte-stable across every Run of a conversation or
-  // the RequestContext changes shape and Cursor's prompt cache goes cold.
+  // When the host sends a nonempty catalog, advertisement must stay
+  // byte-stable across every Run of that sticky conversation or the
+  // RequestContext changes shape and Cursor's prompt cache goes cold.
   //
   // OpenCode V1 *does* shrink the catalog on plan (edit denied → tools dropped
   // in request.ts resolveTools). Copying that into Cursor RequestContext costs
   // the whole tools prefix. Prefer: keep the epoch's fullest catalog for
   // advertisement; compute allowTools from what actually arrived this turn.
-  //
-  // A zero-tool call is never a smaller catalog — it is a lifecycle turn
-  // (compaction, title generation) that re-advertises the last real catalog.
   // New tool names (MCP connect) append at the tail without rewriting
   // descriptors already frozen. Equal name-sets and host shrinks keep the
   // frozen advertisement and its order — schema/description churn must not
   // retokenize tools, and inserting a name that sorts earlier than `z` must
   // not reshuffle the prefix.
   //
-  // On cold start the lifecycle Run may arrive before any catalog exists. For a
-  // valid session key, wait until a sibling doStream publishes the first real
-  // catalog; cancellation is the only escape.
+  // A host-empty tool list is a lifecycle turn (OpenCode 1.x/2.0 title, and
+  // OpenCode 1.x compaction/summary), not a smaller sticky catalog. Advertise
+  // [] to Cursor — matching the host — so the model is not tempted to call
+  // tools on an ephemeral conversation_id. OpenCode 2.0 compaction still
+  // sends a nonempty catalog; that path keeps epoch advertisement above and
+  // refuses execution via isCompaction. Permission stays allowTools=false
+  // whenever incoming tools are empty (or compaction), so bridged
+  // interactions still cannot mutate mode/files on those turns.
+  //
+  // A host-empty Run has its own empty advertisement and needs no sibling
+  // catalog. Waiting here would stall standalone no-tool calls and serialized
+  // title generation before the first normal turn.
+  if (input.abortSignal?.aborted) {
+    throw new CursorLocalCancellationError("Cursor tool-catalog wait cancelled")
+  }
   let advertisedTools: OpencodeToolDef[]
   if (incomingTools.length > 0) {
     if (sessionKey) {
@@ -5105,10 +5081,6 @@ export async function resolveTurnToolState(input: {
     } else {
       advertisedTools = toolsInFixedOrder(incomingTools)
     }
-  } else if (sessionKey) {
-    const cached = toolCatalogBySession.get(sessionKey)
-      ?? await waitForSiblingToolCatalog(sessionKey, input.abortSignal)
-    advertisedTools = cached
   } else {
     advertisedTools = []
   }
@@ -5153,10 +5125,6 @@ export function resolveTurnConversationReset(input: {
 }
 
 export function resetTurnStateForTests(): void {
-  for (const waiters of toolCatalogWaitersBySession.values()) {
-    for (const waiter of waiters) waiter.cancel()
-  }
-  toolCatalogWaitersBySession.clear()
   toolCatalogBySession.clear()
   postCompactionRebaseBySession.clear()
   promptIdentityBySession.clear()

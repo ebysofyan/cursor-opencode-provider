@@ -548,6 +548,61 @@ describe("mapCursorArgsToOpencode", () => {
       args: { id: "ab-probe" },
     })
   })
+  it("fills required todowrite priority (and id/status) when Cursor omits them", () => {
+    // Live OC1 failure: SchemaError Missing key at ["todos"][0]["priority"].
+    expect(mapCursorArgsToOpencode("todowrite", {
+      todos: [
+        { content: "Ship ports", status: "in_progress" },
+        { id: "keep", content: "Verify", status: "pending", priority: "high" },
+      ],
+    }, "mcp_args")).toEqual({
+      toolName: "todowrite",
+      args: {
+        todos: [
+          { id: "1", content: "Ship ports", status: "in_progress", priority: "medium" },
+          { id: "keep", content: "Verify", status: "pending", priority: "high" },
+        ],
+      },
+    })
+  })
+  it("fills required question header (and option description) when the model omits them", () => {
+    // Live OC1 failure: SchemaError Missing key at ["questions"][0]["header"].
+    expect(mapCursorArgsToOpencode("question", {
+      questions: [
+        {
+          question: "Updates found. Which should I package next?",
+          options: [{ label: "Update package", description: "Reuse PR" }, { label: "Only report" }],
+        },
+      ],
+    }, "mcp_args")).toEqual({
+      toolName: "question",
+      args: {
+        questions: [
+          {
+            question: "Updates found. Which should I package next?",
+            header: "Updates found. Which should I…",
+            options: [
+              { label: "Update package", description: "Reuse PR" },
+              { label: "Only report", description: "" },
+            ],
+          },
+        ],
+      },
+    })
+  })
+  it("preserves malformed todo lists for validation instead of silently clearing them", () => {
+    for (const args of [{}, { todos: "invalid" }, { todos: [{ id: "keep", content: "Keep", status: "invalid", priority: "invalid" }, null] }]) {
+      const mapped = mapCursorArgsToOpencode("todowrite", args, "mcp_args").args
+      expect(mapped.todos).toEqual(args.todos === undefined ? undefined : args.todos)
+    }
+  })
+  it("does not fabricate question labels or hide invalid option descriptions", () => {
+    const mapped = mapCursorArgsToOpencode("question", {
+      questions: [{ question: "Choose", header: "   ", options: [{ id: "opaque" }, { label: "A", description: 123 }] }],
+    }, "mcp_args").args.questions as any[]
+    expect(mapped[0].header).toBe("Choose")
+    expect(mapped[0].options).toEqual([{ id: "opaque", description: "" }, { label: "A", description: 123 }])
+  })
   it("remaps grep glob → include", () => {
     const r = mapCursorArgsToOpencode("grep", { pattern: "foo", path: "/src", glob: "*.ts" })
     expect(r).toEqual({ toolName: "grep", args: { pattern: "foo", path: "/src", include: "*.ts" } })

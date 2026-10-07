@@ -489,8 +489,8 @@
   reminder text must name the live key — hard-coding `id` fails 1.18.
 - **Gate the change reminder on this turn’s permission, not the epoch
   advertisement.** `allowTools && incomingTools` includes `skill`; a
-  lifecycle/zero-tool turn that re-advertises the frozen catalog must not ask
-  for a call the host would refuse.
+  host-empty lifecycle turn advertises `[]` and must not ask for a call the
+  host would refuse.
 
 ## 2026-10-01 — Credential renewal: verify against the right Cursor client
 
@@ -629,3 +629,13 @@
 
 - Dynamic invocation identity (`namespace`, `toolName`) lives outside tool arguments and must accompany every call, including parallel members. Server-side wrapper errors can arrive only in a display completion: decode the MCP error title/detail without replaying that completion as host execution.
 - A file tool with optional fields can accept an unrelated `command` and return a successful default listing. Reject misplaced shell commands against the advertised canonical schema while preserving opaque tools, valid default listings, and explicitly command-capable schemas. Host success alone does not establish that the requested operation ran.
+
+## 2026-10-07 — Adversarial skill and argument review
+
+- Compare catalog rendering field by field with the host source. Names and descriptions can be raw while file locations are HTML-escaped; decoding every field or decoding twice corrupts literal entity text.
+- A replace-all tool must reject malformed input before side effects. Reusing a permissive storage normalizer at the validation boundary can silently turn a missing list into a successful deletion.
+- A checkpoint-backed conversation and a positive context size establish continuity, not cache reuse. Report a zero cache counter without guessing why it is zero.
+
+## 2026-10-08 — Retry cleanup after releasing pump ownership
+
+- Cleanup during an active pump must defer to its owner, but a canceled consumer can stop that pump without receiving a remote terminal event. Retry ordinary cleanup after the same owner releases it; keep pending tool turns and never release or close a newer owner's pump (`test/run-interruption.test.ts`).

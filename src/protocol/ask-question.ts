@@ -214,12 +214,47 @@ export function displayOptions(question: CursorAskQuestionItem): CursorAskQuesti
   return question.options.slice()
 }
 
-function header(title: string): string {
+/** OpenCode `Question.Prompt.header`: short label, max 30 chars. */
+export function questionHeader(title: string): string {
   const trimmed = title.trim()
   if (!trimmed) return "Question"
   return trimmed.length > HEADER_MAX_LENGTH
     ? trimmed.slice(0, HEADER_MAX_LENGTH - 1).trimEnd() + "…"
     : trimmed
+}
+
+/**
+ * Fill required OpenCode `question` fields when a model call omits them.
+ * Live OC1 failure: SchemaError Missing key at ["questions"][0]["header"].
+ */
+export function normalizeOpencodeQuestionArgs(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(args.questions)) return args
+  return {
+    ...args,
+    questions: args.questions.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item
+      const q = item as Record<string, unknown>
+      const prompt = typeof q.question === "string" ? q.question : ""
+      const existing = typeof q.header === "string" ? q.header : ""
+      const options = Array.isArray(q.options)
+        ? q.options.map((opt) => {
+            if (!opt || typeof opt !== "object" || Array.isArray(opt)) return opt
+            const o = opt as Record<string, unknown>
+            return {
+              ...o,
+              ...(o.description === undefined ? { description: "" } : {}),
+            }
+          })
+        : q.options
+      return {
+        ...q,
+        header: questionHeader(existing.trim() || prompt),
+        options,
+      }
+    }),
+  }
 }
 
 export type OpencodeQuestionInput = {
@@ -240,7 +275,7 @@ export function askQuestionToolInput(args: CursorAskQuestionArgs): OpencodeQuest
   return {
     questions: args.questions.map((question) => ({
       question: question.prompt,
-      header: header(args.title),
+      header: questionHeader(args.title),
       options: displayOptions(question).map((option) => ({
         label: option.label,
         description: "",

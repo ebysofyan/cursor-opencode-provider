@@ -99,6 +99,13 @@ describe("provider / compatibility-layer architecture", () => {
     expect((bridge.match(/Symbol\.for\("opencode\.host\.event-bridge"\)/g) ?? []).length).toBe(1)
   })
 
+  test("the structural host skills contract uses only the neutral symbol", () => {
+    const skills = source(path.join(ROOT, "src/context/skills-bridge.ts"))
+    expect(skills).toContain('Symbol.for("opencode.host.skills")')
+    expect(skills).not.toContain("opencode.compat.skills")
+    expect((skills.match(/Symbol\.for\("opencode\.host\.skills"\)/g) ?? []).length).toBe(1)
+  })
+
   test("runtime modules do not statically import @opencode-ai/plugin", () => {
     const targets = [
       "src/plugin.ts",

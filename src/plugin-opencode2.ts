@@ -32,6 +32,7 @@ import { OPENCODE_2_TOOL_DIALECT } from "./protocol/tools.js"
 import { clearSessionTodos } from "./todo-store.js"
 import { markCompactionSession } from "./compaction-marker.js"
 import { getSessionDirectory, markSessionDirectory } from "./session-directory.js"
+import { rememberHostSkillFiles } from "./context/skills.js"
 import { trace } from "./debug.js"
 import {
   cancelHostAgentModeSwitch,
@@ -445,6 +446,19 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
     // last known session directory ahead of this Location's static root.
     // Scoped by the host to this provider: other providers' requests never
     // reach the callback, so the header cannot leak to their endpoints.
+    // Skill files for RequestContext path-desc `agent_skills` (see context/skills.ts).
+    const rememberSkillFiles = async () => {
+      if (!ctx.skill) return
+      try {
+        const listed = await ctx.skill.list()
+        // skill.list is bound to this plugin Location. A session may have
+        // moved; never relabel this catalog with the session's new directory.
+        rememberHostSkillFiles(listed.location.directory, listed.data)
+      } catch (error) {
+        trace(`model.request: skill.list failed: ${String(error)}`)
+      }
+    }
+
     await track(
       ctx.session.hook(
         "model.request",
@@ -459,6 +473,7 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
           markSessionDirectory(event.sessionID, current)
           const directory = current ?? getSessionDirectory(event.sessionID) ?? ctx.location?.directory
           if (!directory) return
+          await rememberSkillFiles()
           event.headers = {
             ...event.headers,
             "x-opencode-directory": encodeURIComponent(directory),

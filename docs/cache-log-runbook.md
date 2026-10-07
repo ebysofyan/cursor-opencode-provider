@@ -278,6 +278,11 @@ outstanding) historically cratered cache even with a reused conversation_id.
 - checkpoint `tools` steps up by ~630–640 tokens once (e.g. 7774→8407) and then
   stays flat on following turns;
 - the next ordinary turn recovers to a high `rawReadRatio` with `tools+0`.
+- A CreatePlan/SwitchMode turn with TurnEnded `cache_read=0` is tagged
+  `turnEndedCacheRead=zero-interaction` and `cacheReuseEvidence=unavailable`.
+  Checkpoint occupancy measures context size; it cannot establish a cache hit
+  or prove that upstream omitted a counter. Keep the zero counter as reported
+  and assess subsequent turns independently.
 
 This is Cursor's backend filing first-use native call/result content (CreatePlan
 call envelope plus its fixed result boilerplate) under the `tools` category. It

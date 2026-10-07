@@ -548,6 +548,48 @@ describe("Cursor cache diagnostics", () => {
     )
     expect(line).toContain("createPlanInTurn=true switchModeInTurn=true")
   })
+
+  it("does not infer cache reuse or omitted counters from warm CreatePlan occupancy", () => {
+    const prior = {
+      usedTokens: 50_742,
+      maxTokens: 200_000,
+    }
+    const line = formatCursorCacheDiagnostics(
+      {
+        inputTokens: 52_000,
+        outputTokens: 800,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 0,
+      },
+      {
+        usedTokens: 51_200,
+        maxTokens: 200_000,
+      },
+      prior,
+      {
+        conversationId: "conversation-plan-omit-cache",
+        startedWithCheckpoint: true,
+        requestContextReused: true,
+        requestContextHash: "abcdef0123456789",
+        checkpointUpdates: 2,
+        tokenDetailUpdates: 2,
+        pumpPasses: 1,
+        stepStarts: 1,
+        stepCompletes: 1,
+        displayToolCalls: 1,
+        execRequests: 0,
+        createPlanInTurn: true,
+      },
+    )
+    expect(line).toContain("continuity=warm")
+    expect(line).toContain("rawCacheRead=0")
+    expect(line).toContain("createPlanInTurn=true")
+    expect(line).toContain("turnEndedCacheRead=zero-interaction")
+    expect(line).toContain("cacheReuseEvidence=unavailable")
+    expect(line).not.toContain("omitted-interaction")
+    expect(line).not.toContain("occupancyReadEstimate")
+  })
 })
 
 describe("sticky-session cache diagnosis", () => {

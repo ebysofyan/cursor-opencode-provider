@@ -160,13 +160,14 @@ describe("conversation restart persistence", () => {
     expect(hydrated?.hostAgent).toBe("plan")
     expect(hydrated?.systemPromptHash).toBe("stable-prompt-hash")
     restoreTurnToolCatalog(sessionKey, hydrated!.toolCatalog)
-    // A hydrated catalog is re-advertised on every lifecycle turn so the
-    // RequestContext keeps its shape and the prompt cache survives; execution
-    // stays refused until a turn actually arrives with tools.
+    // Host-empty lifecycle turns advertise [] (title / OC1 compaction). The
+    // hydrated catalog is still available for the next nonempty turn.
     expect(await resolveTurnToolState({ sessionKey, incomingTools: [], isCompaction: false }))
-      .toEqual({ advertisedTools: toolCatalog, allowTools: false })
+      .toEqual({ advertisedTools: [], allowTools: false })
     expect(await resolveTurnToolState({ sessionKey, incomingTools: [], isCompaction: true }))
-      .toEqual({ advertisedTools: toolCatalog, allowTools: false })
+      .toEqual({ advertisedTools: [], allowTools: false })
+    expect(await resolveTurnToolState({ sessionKey, incomingTools: toolCatalog, isCompaction: false }))
+      .toEqual({ advertisedTools: toolCatalog, allowTools: true })
     expect(bindConversationId(sessionKey).conversationId).toBe(conversationId)
     expect(getCheckpoint(conversationId)).toEqual(checkpoint)
     expect(getConversationBlob(conversationId, blobId)).toEqual(blobData)

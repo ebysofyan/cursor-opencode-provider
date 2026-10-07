@@ -22,6 +22,8 @@ import {
   buildBackgroundShellCommand,
   type CursorShellOutcome,
 } from "../shell-timeout.js"
+import { normalizeOpencodeQuestionArgs } from "./ask-question.js"
+import { normalizeOpencodeTodoArgs } from "../todo-store.js"
 
 // Exec variant field number whose reply is the server-initiated request_context
 // probe (ExecServerMessage #10 → ExecClientMessage #10). request/result share a
@@ -1528,6 +1530,22 @@ export function mapCursorArgsToOpencode(
       delete args.name
       if (value) args[dialect.skillArgKey] = value
       return { toolName: "skill", args }
+    }
+    case "todowrite": {
+      // OpenCode requires `priority` on every todo item. Cursor TodoWrite /
+      // model MCP calls often omit it; fill host defaults before validation.
+      return {
+        toolName: "todowrite",
+        args: normalizeOpencodeTodoArgs(cleaned),
+      }
+    }
+    case "question": {
+      // OpenCode requires `header` on every question. Model MCP calls often
+      // omit it (AskQuestion bridge already fills it); default before validation.
+      return {
+        toolName: "question",
+        args: normalizeOpencodeQuestionArgs(cleaned),
+      }
     }
     default:
       return { toolName, args: cleaned }
