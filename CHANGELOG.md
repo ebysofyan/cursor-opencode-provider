@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Cursor models now see OpenCode skills the way Cursor presents them (each skill's file path, read on demand), so they load matching skills without going through the dynamic tool catalog
+
 ## [0.8.0] - 2026-10-04
 
 ### Changed
