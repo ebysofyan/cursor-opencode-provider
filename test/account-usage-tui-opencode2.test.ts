@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { accountUsageRpcContract } from "../src/account-usage-rpc.js"
+import { accountUsageRpcContract } from "../src/opencode2/account-usage-rpc-contract.js"
 import {
   CursorAccountUsageOpenCode2TuiPlugin,
   CURSOR_ACCOUNT_USAGE_TUI_COMMAND,
@@ -155,5 +155,38 @@ describe("opencode2 account usage TUI", () => {
   it("exposes the command id and slash name as shared constants", () => {
     expect(CURSOR_ACCOUNT_USAGE_TUI_COMMAND.id).toBe("cursor_usage")
     expect(CURSOR_ACCOUNT_USAGE_TUI_COMMAND.slash).toBe("cursor-usage")
+  })
+})
+
+describe("opencode2 account usage TUI failure classification", () => {
+  // The TUI is a separate process from the credential-owning server, so an
+  // uninstalled server plugin must not be reported as a Cursor hiccup.
+  it("reports a missing server plugin instead of a transient error", async () => {
+    const missing = Object.assign(new Error("rpc failed"), { type: "rpc.method_not_found" })
+    const { context, toasts } = fakeContext(okSnapshot, () => Promise.reject(missing))
+    const { command } = await installedCommand(context)
+    await command.run()
+    expect(toasts.at(-1)).toMatchObject({
+      title: "Cursor usage unavailable",
+      message: "Usage unavailable (server plugin not loaded)",
+      variant: "warning",
+    })
+  })
+
+  it("matches an rpc.unavailable error carried only in the message", async () => {
+    const { context, toasts } = fakeContext(okSnapshot, () => Promise.reject(new Error("rpc.unavailable")))
+    const { command } = await installedCommand(context)
+    await command.run()
+    expect(toasts.at(-1)?.message).toBe("Usage unavailable (server plugin not loaded)")
+  })
+
+  it("still reports any other failure as a transient error", async () => {
+    const { context, toasts } = fakeContext(okSnapshot, () => Promise.reject(new Error("connection reset")))
+    const { command } = await installedCommand(context)
+    await command.run()
+    expect(toasts.at(-1)).toMatchObject({
+      message: "Usage unavailable (temporary error)",
+      variant: "error",
+    })
   })
 })

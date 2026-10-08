@@ -23,6 +23,9 @@ const ACCOUNT_USAGE_OUTPUT_SCHEMA = {
     output: { type: "string" },
     content: { type: "string" },
   },
+  // Both are always returned, so declare them like the other direct-catalog
+  // tools (`image-save-tool.ts`, `todo-tools.ts`).
+  required: ["output", "content"],
 } as const
 
 /**

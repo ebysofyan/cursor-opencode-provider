@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import { createAccountUsageCache } from "../src/account-usage.js"
-import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "../src/account-usage-rpc.js"
+import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "../src/opencode2/account-usage-rpc-contract.js"
 import {
   createAccountUsageCacheFor,
   CURSOR_ACCOUNT_USAGE_TOOL_NAME,

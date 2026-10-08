@@ -1,6 +1,6 @@
 import type {
   CursorAccountUsageSnapshot,
-} from "./account-usage.js"
+} from "../account-usage.js"
 
 export const CURSOR_ACCOUNT_USAGE_RPC_ID = "cursor-opencode-provider.account-usage"
 

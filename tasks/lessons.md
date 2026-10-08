@@ -648,3 +648,8 @@
 
 - Racing an iterator read against a timer does not cancel that read. Keep its promise on the session until consumed, including late EOF/errors; every continuation and drain must use the same reader (`src/session.ts:922`, `test/parallel-pump.test.ts:322`).
 - Once a streamed host tool has been emitted, terminal recovery must finish the tool step before rebasing from its result. A checkpoint does not make replay of already-started host side effects safe (`src/language-model.ts:2863`, `test/parallel-pump.test.ts:351`).
+
+## 2026-10-09 — An RPC payload must omit absent members, not declare them undefined
+
+- The OpenCode RPC wire format serializes an explicitly-`undefined` object member as `null`, so a snapshot that models "not reported" as `undefined` is rejected by the host against its own declared schema (`rpc.invalid_output: Expected number at ["plan"]["bonusSpendDollars"]`). Strip absent members at the RPC boundary; keep `undefined` inside the in-process snapshot, where the pure formatters need it to tell "not reported" from a real zero (`src/opencode2/account-usage-rpc.ts`, `test/account-usage-opencode2.test.ts`).
+- A fixture where every field is populated cannot catch this. Exercise the handler with a sparse snapshot, and prefer a live `client.rpc(...)` call over the CLI when probing the transport: `opencode api post /api/rpc/<id>/<method>` needs an `{"input":{}}` envelope, and the same wrong envelope fails every plugin identically, which looks like a plugin bug rather than a caller bug.

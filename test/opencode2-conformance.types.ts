@@ -198,4 +198,4 @@ void (async () => {
 
 // TUI plugin must typecheck against the duck-typed host TUI context.
 declare const tuiCtx: HostTuiContext
-void CursorAccountUsageOpenCode2TuiPlugin(tuiCtx as never)
+void CursorAccountUsageOpenCode2TuiPlugin(tuiCtx)

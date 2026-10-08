@@ -46,11 +46,18 @@ export type CursorUsageStoreBearerOptions = {
  * plugin's existing renewal-aware auth machinery, with no second probe or
  * credential parser here: an OAuth session token goes through
  * `renewSessionIfDue` (renews only when due, keeps a still-valid token
- * through a transient failure; renewed tokens are shared in-process via the
- * renewal layer's successor map, while persisting them stays the plugin's
- * per-Run job), a raw `crsr_` key is exchanged through the shared API-key
- * path, and a raw key stored as an access token is rejected by
+ * through a transient failure), a raw `crsr_` key is exchanged through the
+ * shared API-key path, and a raw key stored as an access token is rejected by
  * `resolveBearerToken`, never sent as a Bearer.
+ *
+ * Renewal is deliberately **not** persisted here. The only durable writer is
+ * the host's own `client.auth.set`, which the classic plugin has and this
+ * surface does not; `src/context/auth-store.ts` exports a reader only. Writing
+ * OpenCode's credential file directly would take ownership of host state the
+ * provider does not own, so a renewal reached through this path lives in the
+ * renewal layer's successor map for the life of the process and the next
+ * process renews again. Nothing is ever overwritten unconditionally, which is
+ * the property the compare-and-set rule in `plugin.ts` protects.
  */
 export function cursorUsageStoreBearer(options: CursorUsageStoreBearerOptions = {}): BearerSource {
   const read = options.read ?? readStoredAuth

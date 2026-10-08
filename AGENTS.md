@@ -92,6 +92,7 @@ OpenCode
 | CreatePlan bridge | `src/protocol/create-plan.ts`, `src/host-plan-file.ts`, `hostPlanFilePath` / `hostPlansDir` in `src/context/paths.ts` | Cursor CreatePlan (#7) → plain markdown where the host keeps plans (OpenCode 1.x `Session.plan`, OpenCode 2.0 Plan directory, or the path bridge); optional advertised host stage remains capability-gated; without `plan_exit`, Yes/No via advertised `question` |
 | Host agent mode sync | `src/host-agent-mode.ts` | Structural callback/terminal queue: approved Cursor plan/spec → native `plan`, other modes (including CreatePlan Yes) → `build`; installed on OpenCode 1.x (`promptAsync`) and OpenCode 2.0 (`switchAgent` + continue) |
 | Image generation | `src/protocol/generate-image.ts`, `src/image-staging.ts`, `src/image-save.ts` | Cursor GenerateImage approval + permission-gated byte write |
+| Account usage | `src/account-usage.ts`, `src/account-usage-format.ts`, `src/account-usage-toast.ts`, `src/account-usage-tool.ts`, `src/plugin-tui.ts`, `src/opencode2/account-usage-{tool,rpc-contract,rpc,tui}.ts` | Read-only Cursor billing-period usage: `DashboardService/GetCurrentPeriodUsage` plus a best-effort `GetHardLimit`, credential-scoped 60 s cache, `cursor_usage` tool and `/cursor-usage` TUI command on both hosts. Spend fields are cents and `GetHardLimit.hardLimit` is already dollars; percentages are server-reported and never recomputed. **OpenCode 2.0 TUI reaches the data only through the server RPC** — a cross-process dependency, so loading the TUI plugin without the server plugin reports "server plugin not loaded" rather than usage; keep the contract and its TUI client in step across 2.0 patch releases. OpenCode 1.x TUI resolves credentials itself, so its renewal is in-process only: the standalone TUI has no host auth client, so it never writes OpenCode's credential file and a renewed token is not durable there. Separate from `src/usage.ts`, which is per-turn context occupancy |
 | Transport | `src/transport/connect.ts` | HTTP/2 bidi + unary RPC |
 | HTTPS proxy | `src/transport/https-proxy.ts` | CONNECT tunnel for Run when `HTTPS_PROXY` applies |
 
@@ -101,6 +102,8 @@ Package exports:
 - `cursor-opencode-provider/plugin` → classic Hooks (auth)
 - `cursor-opencode-provider/plugin/v2` → 1.18 v2 plugin only (`CursorPluginV2` is **not** on the root export)
 - `cursor-opencode-provider/plugin/opencode2` → OpenCode 2.0 plugin only
+- `cursor-opencode-provider/plugin/opencode2/tui` → OpenCode 2.0 TUI plugin (`{ id, setup }`) for `/cursor-usage`; load from `cli.json` `plugins`
+- `cursor-opencode-provider/tui` → OpenCode 1.x TUI plugin (`{ id, tui }`) for `/cursor-usage`; load from `tui.json` `plugin`
 - `cursor-opencode-provider/image-save` → host-neutral `executeCursorImageSave` (pi-bridge / non-plugin hosts; not on the package root)
 
 ## OpenCode 2.0 vs the 1.18 "v2" plugin API

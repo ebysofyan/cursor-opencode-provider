@@ -1,4 +1,4 @@
-import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "../account-usage-rpc.js"
+import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "./account-usage-rpc-contract.js"
 import type { AccountUsageCache } from "../account-usage.js"
 import type { Registration, RpcDomain } from "./types.js"
 

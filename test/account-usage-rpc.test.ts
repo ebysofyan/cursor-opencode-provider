@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "../src/account-usage-rpc.js"
+import { accountUsageRpcContract, CURSOR_ACCOUNT_USAGE_RPC_ID } from "../src/opencode2/account-usage-rpc-contract.js"
 
 // Minimal JSON-Schema-subset validator mirroring the host runtime validation
 // surface: type, required, additionalProperties:false, enum, maxLength.
