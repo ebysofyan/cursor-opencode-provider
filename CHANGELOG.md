@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `cursor_usage` tool and `/cursor-usage` slash command showing current Cursor account billing-period usage (read-only; OpenCode 1.x tool and TUI toast, OpenCode 2.0 tool, RPC bridge, and TUI toast)
+
 ## [0.8.1] - 2026-10-08
 
 ### Added

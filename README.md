@@ -52,6 +52,7 @@ OpenCode driving a Cursor-routed Grok model through this provider:
 - **Streaming** — bidirectional Connect-RPC Runs with stale-session rotation, health checks, semantic/read-idle deadlines, bounded replay-safe recovery, and activity-aware held tool continuations
 - **Tool calls** — maps Cursor exec-server messages to AI SDK / OpenCode tool-call parts using only the advertised canonical catalog. Exact advertised subagent names win; standard Cursor roles select compatible OpenCode agents, and native Task maps to OpenCode 1.x `task` or OpenCode 2.0 `subagent`. OCP translates any alternate host vocabulary before it reaches this package. The bridge also covers Cursor's typed read/bash/edit/write/grep/find/ls request/result range, mirrors finalized display-only todo/plan state, and strips OpenCode 1.x and OpenCode 2 read envelopes before returning content to Cursor.
 - **Thinking / reasoning** — surfaces extended-thinking deltas where the model supports it
+- **Account usage** — a read-only `cursor_usage` tool and a `/cursor-usage` TUI slash command show the current Cursor billing-period usage (Included / Auto / API / on-demand rows with a [dashboard](https://cursor.com/dashboard?tab=usage) link) as a toast on OpenCode 1.x and 2.0. This is account quota, not per-message context/token usage, and nothing polls in the background. Setup: [OpenCode 1.x](docs/opencode-1.md#account-usage) · [OpenCode 2.0](docs/opencode-2.md#account-usage)
 
 ## Requirements
 
@@ -350,6 +351,8 @@ Primary modes and hidden/internal agents are never selected unless OpenCode expl
 | `cursor-opencode-provider/plugin/v2` | OpenCode 1.18 Effect/Promise v2 plugin (`ctx.aisdk.*`) |
 | `cursor-opencode-provider/plugin/opencode2` | OpenCode 2.0 plugin (self-registering: models + auth + tools) |
 | `cursor-opencode-provider/server` | Same OpenCode 2.0 entry; OpenCode 2 Host.resolve and OpenCode 1.18 `exports["./server"]` |
+| `cursor-opencode-provider/tui` | OpenCode 1.x TUI plugin (`{ id, tui }`) registering the `/cursor-usage` slash command |
+| `cursor-opencode-provider/plugin/opencode2/tui` | OpenCode 2.0 TUI plugin (`{ id, setup }`) registering `/cursor-usage` via the server `usage` RPC |
 | `cursor-opencode-provider/errors` | Structured provider error classes |
 | `cursor-opencode-provider/image-save` | Host-neutral `executeCursorImageSave` (pi-bridge / non-plugin hosts) |
 

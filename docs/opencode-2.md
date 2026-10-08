@@ -254,6 +254,24 @@ opencode2 service start
 
 Then `/connect` → **Cursor** if credentials are missing. Filter the picker by provider **Cursor**. Models should appear without a `providers.cursor` block.
 
+## Account usage
+
+The `plugin/opencode2` server entry registers a read-only `cursor_usage` tool on the direct catalog (`codemode: false`, no arguments) next to the other plugin tools — no extra server configuration. It renders the current Cursor billing-period summary (Included / Auto / API / on-demand rows, cycle reset date, [usage dashboard](https://cursor.com/dashboard?tab=usage) link) from the same shared cache the TUI uses.
+
+`/cursor-usage` runs in the TUI process, which has no access to Cursor credentials or the network: the command calls the server plugin's `usage` RPC (`cursor-opencode-provider.account-usage`) and shows the snapshot as a toast (warning at ≥75%, error at ≥90%). No polling or timers; results are cached server-side for 60 seconds per credential.
+
+To install the slash command, add the TUI export to `~/.config/opencode2/cli.json`'s `plugins` array — the same file and shape the `opencode-codex-usage` reference installer uses for its OpenCode 2 TUI wrapper:
+
+```json
+{
+  "plugins": ["cursor-opencode-provider/plugin/opencode2/tui"]
+}
+```
+
+Keep any existing entries in the array. For a local clone, use a plugin **directory** under `$OPENCODE_CONFIG_DIR/plugins/` (same pattern as the server entry) whose `index.js` re-exports `/absolute/path/to/cursor-opencode-provider/dist/opencode2/account-usage-tui.js`.
+
+> **Live-check note:** the `cli.json` `plugins` shape mirrors the reference installer (`~/.config/opencode2/cli.json` → TUI wrapper in `plugins`, per the `opencode-codex-usage` README and its `--install --opencode 2` writer), but this repo has not yet recorded a live OpenCode 2.0 TUI load test (spec risk R3). If `/cursor-usage` is missing after `opencode2 service restart`, verify the entry loaded and record the accepted path before relying on this snippet.
+
 ## Troubleshooting
 
 | Problem | What to try |

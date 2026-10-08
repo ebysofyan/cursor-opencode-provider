@@ -91,6 +91,24 @@ opencode run --model cursor/composer-2.5 "Hello from Cursor via OpenCode"
 
 Variant, long-context, Fast, image, and Max Mode behavior is the same on every host — see [Select a model](../README.md#select-a-model) in the root README.
 
+## Account usage
+
+The classic plugin registers a read-only `cursor_usage` tool (no arguments). Calling it — or asking the model about your Cursor usage — returns the current billing-period summary: Included / Auto / API / on-demand rows with dollar amounts and percent-used bars, the cycle reset date, and a link to the [usage dashboard](https://cursor.com/dashboard?tab=usage). The probe uses your existing Cursor login; it is read-only and does not change per-message context/token accounting.
+
+For a quick check without spending a model turn, `/cursor-usage` shows the same summary as a TUI toast (warning at ≥75%, error at ≥90% of the highest row). There is no background polling: the probe runs only when the command is selected or the tool is called, and repeated calls within 60 seconds reuse the cached result. Without a Cursor login both surfaces report `unavailable (auth required)`.
+
+The classic `plugin` entry alone registers only the tool; the slash command needs a separate TUI plugin entry in `~/.config/opencode/tui.json`:
+
+```jsonc
+{
+  "plugin": ["cursor-opencode-provider/tui"]
+}
+```
+
+Local-clone equivalent: `"file:///absolute/path/to/cursor-opencode-provider/dist/plugin-tui.js"`. Restart OpenCode and run `/cursor-usage` from the command palette.
+
+> **Live-check note:** which OpenCode 1.x config file accepts a `{ id, tui }` TUI export (spec risk R3) is grounded here against the `opencode-codex-usage` reference installer, which writes its `{ id, tui }` TUI entry into `tui.json`'s `plugin` array (`resolveTuiConfigPath` in its `lib/codex-usage-cli.ts`). This repo has not yet recorded its own O1 load test: if `/cursor-usage` does not appear after a restart, also add `"cursor-opencode-provider/tui"` to the `opencode.json` `plugin` array and record which file accepted it.
+
 ## Troubleshooting
 
 | Problem | What to try |

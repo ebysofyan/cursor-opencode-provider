@@ -40,6 +40,14 @@
       "types": "./dist/plugin-opencode2.d.ts",
       "import": "./dist/plugin-opencode2.js"
     },
+    "./tui": {
+      "types": "./dist/plugin-tui.d.ts",
+      "import": "./dist/plugin-tui.js"
+    },
+    "./plugin/opencode2/tui": {
+      "types": "./dist/opencode2/account-usage-tui.d.ts",
+      "import": "./dist/opencode2/account-usage-tui.js"
+    },
     "./server": {
       "types": "./dist/plugin-opencode2.d.ts",
       "import": "./dist/plugin-opencode2.js"
