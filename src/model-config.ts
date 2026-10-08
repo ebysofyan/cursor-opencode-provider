@@ -106,7 +106,7 @@ function modelInfoVariants(
     // variant entry indistinguishable from the model entry in pickers that
     // collapse them.
     if (key === baseName && !usedKeys.has(key)) {
-      key = `${baseName}${tagDims(v.parameterValues)}` || `${baseName} default`
+      key = `${baseName}${tagDims(v.parameterValues) || " default"}`
     } else if (usedKeys.has(key)) {
       key = `${sanitized}${tagDims(v.parameterValues)}`
     }
@@ -157,6 +157,26 @@ export function thinkingSuffixBaseNames(models: ModelInfo[]): Set<string> {
   return ambiguous
 }
 
+/**
+ * models.dev-style family for a Cursor model id: the id without its version
+ * segments and context/speed suffixes (`claude-haiku-4-5` → `claude-haiku`,
+ * `gemini-3.8-flash` → `gemini-flash`, `gpt-5.6-luna` → `gpt-luna`).
+ * Kimi keeps its major generation (`kimi-k2.7-code` → `kimi-k2`). OpenCode
+ * picks its small title model by family and falls back to the session model when
+ * no entry has one. Cursor Auto (`default`) is not a model family.
+ */
+export function cursorModelFamily(id: string): string | undefined {
+  if (id === "default") return undefined
+  const base = id.replace(/(?:-(?:1m|fast))+$/, "")
+  const kimi = /^kimi-(k\d+)(?:[.p]\d+)*(?:-code(?:-highspeed)?)?$/.exec(base)
+  if (kimi) return `kimi-${kimi[1]}`
+  const family = base
+    .split("-")
+    .filter((part) => !/^\d+(?:[.p]\d+)*$/.test(part))
+    .join("-")
+  return family || undefined
+}
+
 export function modelInfoToConfig(
   mi: ModelInfo,
   options: {
@@ -204,6 +224,11 @@ export function modelInfoToConfig(
       output,
     },
   }
+  // Optional cache metadata may supply a family; the live AvailableModels
+  // schema has no family field. Empty metadata must not block derivation.
+  const reported = typeof mi.family === "string" ? mi.family.trim() : ""
+  const family = reported || cursorModelFamily(mi.id)
+  if (family) config.family = family
   const variantConfig = modelInfoVariants(mi, variants)
   if (variantConfig) config.variants = variantConfig
   if (contextTier === "long" || options.fast) {
