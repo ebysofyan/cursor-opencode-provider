@@ -2,12 +2,16 @@
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-08
+
 ### Added
 
 - Cursor models see host skills the way Cursor presents them: RequestContext `agent_skills` with each skill's file path and description (no content), so matching skills can be loaded by reading the file when the host advertises `skill` ([#62](https://github.com/oakimov/cursor-opencode-provider/pull/62) by [@nkoynov](https://github.com/nkoynov))
+- Claude Haiku 5.5 pricing, context, and capability metadata from Cursor's model docs
 
 ### Changed
 
+- External contributions are welcome again; PR descriptions must stay concise and human-readable
 - CreatePlan writes plans where OpenCode keeps them: the session's own plan file on OpenCode 1.x (`.opencode/plans/` in a git project, otherwise the data `plans/` folder) and the Plan directory (`~/.opencode/plan`) on OpenCode 2.0, instead of a provider-chosen folder
 - Cursor follows the OpenCode agent on every turn, as Cursor CLI does: choosing `plan` in OpenCode's agent picker puts Cursor in plan mode, and leaving it returns Cursor to agent mode
 - Cursor SwitchMode into plan mode moves the session to OpenCode's `plan` agent once the turn ends (OpenCode 2.0, and 1.x without `plan_enter`)
