@@ -1,0 +1,36 @@
+{
+  "currentPeriodUsage": {
+    "planUsage": {
+      "totalSpend": 250,
+      "includedSpend": 200,
+      "bonusSpend": 0,
+      "remaining": 1750,
+      "limit": 2000,
+      "autoSpend": 150,
+      "apiSpend": 50,
+      "autoLimit": 1800,
+      "apiLimit": 200,
+      "autoPercentUsed": 8.3333,
+      "apiPercentUsed": 25,
+      "totalPercentUsed": 12.5
+    },
+    "spendLimitUsage": {
+      "totalSpend": 0,
+      "individualLimit": 1000,
+      "individualUsed": 250,
+      "individualRemaining": 750,
+      "limitType": "individual"
+    },
+    "enabled": true,
+    "displayMessage": "",
+    "autoModelSelectedDisplayMessage": "",
+    "namedModelSelectedDisplayMessage": "",
+    "billingCycleStart": 1761868800000,
+    "billingCycleEnd": 1764547200000
+  },
+  "hardLimit": {
+    "hardLimit": 10,
+    "noUsageBasedAllowed": false,
+    "onDemandSpendDisabledByOrganization": false
+  }
+}
