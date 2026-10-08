@@ -20,6 +20,7 @@ import { errorMessage, trace } from "./debug.js"
 import { readCache, discoverModels, isCacheFresh } from "./models.js"
 import { modelsToConfig } from "./model-config.js"
 import { loadClassicTools } from "./classic-tools.js"
+import { createAccountUsageCache, type BearerSource } from "./account-usage.js"
 import { opencodeGlobalCacheDir } from "./context/paths.js"
 import { readStoredAuth, type StoredAuth } from "./context/auth-store.js"
 import { resolveAgentUrl } from "./agent-url.js"
@@ -131,7 +132,25 @@ function installPromptHostAgentModeSwitch(
 export async function CursorPlugin(input: PluginInput): Promise<Hooks> {
   const cacheDir = opencodeGlobalCacheDir()
   const apiBaseURL = cursorApiBaseURL()
-  const classicTools = await loadClassicTools()
+  // Shared account-usage cache for the cursor_usage tool: one probe per
+  // credential per TTL, no duplication of the core probe. The bearer resolves
+  // through this plugin's existing auth paths (durable store + the same
+  // resolveAccessToken renewal/persist machinery loadModels uses); the probe
+  // itself never forces a renewal.
+  const accountUsageBearer: BearerSource = async () => {
+    const auth = await authFromStore()
+    if (!auth) {
+      throw new CursorAuthError("No Cursor login found; sign in to Cursor", { code: "no_credential" })
+    }
+    const token = await resolveAccessToken(auth, authFromStore)
+    if (!token) {
+      throw new CursorAuthError("No Cursor login found; sign in to Cursor", { code: "no_credential" })
+    }
+    return token
+  }
+  const classicTools = await loadClassicTools({
+    accountUsage: createAccountUsageCache({ bearer: accountUsageBearer }),
+  })
 
   const sessionClient = (input as unknown as {
     client?: { session?: { promptAsync?: (args: unknown) => Promise<unknown> } }
@@ -326,6 +345,10 @@ export async function CursorPlugin(input: PluginInput): Promise<Hooks> {
       // host's text `write`. Handle-only, so its presence in the catalog does
       // not give any model a way to write arbitrary files — see image-save.ts.
       cursor_image_save: classicTools.imageSave,
+      // Read-only account usage probe (shared cache with the /cursor-usage
+      // TUI command); no arguments, so advertising it gives the model no
+      // request-shaping surface.
+      cursor_usage: classicTools.accountUsage,
     },
 
     async event({ event }) {

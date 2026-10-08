@@ -3,6 +3,12 @@ import { pathToFileURL } from "node:url"
 import { opencodeGlobalConfigDirs } from "./context/paths.js"
 import { createOpenCodeWebSearchTool, openCodeWebSearchTool } from "./web-search-tool.js"
 import { createCursorImageSaveTool, cursorImageSaveTool } from "./image-save-tool.js"
+import {
+  createOpenCodeAccountUsageTool,
+  cursorUsageStoreBearer,
+  identityAccountUsageToolFactory,
+} from "./account-usage-tool.js"
+import { createAccountUsageCache, type AccountUsageCache } from "./account-usage.js"
 
 /**
  * Classic plugin tools built with the host's own `tool()` helper when it can
@@ -13,10 +19,17 @@ import { createCursorImageSaveTool, cursorImageSaveTool } from "./image-save-too
 export async function loadClassicTools(options: {
   importModule?: (specifier: string) => Promise<{ tool?: any }>
   configDirs?: string[]
+  /** Shared Cursor account usage cache; defaults to one over the durable-store bearer. */
+  accountUsage?: AccountUsageCache
 } = {}): Promise<{
   webSearch: any
   imageSave: any
+  accountUsage: any
 }> {
+  const accountUsageCache = options.accountUsage
+    ?? createAccountUsageCache({ bearer: cursorUsageStoreBearer() })
+  const buildAccountUsage = (factory: { tool: (definition: Record<string, unknown>) => any }): any =>
+    createOpenCodeAccountUsageTool(factory, { cache: accountUsageCache })
   const configDir = options.configDirs?.[0] ?? opencodeGlobalConfigDirs()[0]
   const candidates = [
     ...(configDir
@@ -39,6 +52,7 @@ export async function loadClassicTools(options: {
         return {
           webSearch: createOpenCodeWebSearchTool(factory),
           imageSave: createCursorImageSaveTool(factory),
+          accountUsage: buildAccountUsage(factory),
         }
       }
     } catch {
@@ -47,5 +61,9 @@ export async function loadClassicTools(options: {
   }
   // `tool()` is an identity helper; the fallback definitions use plain JSON
   // Schema accepted by OpenCode's legacy registry when no Zod helper is present.
-  return { webSearch: openCodeWebSearchTool, imageSave: cursorImageSaveTool }
+  return {
+    webSearch: openCodeWebSearchTool,
+    imageSave: cursorImageSaveTool,
+    accountUsage: buildAccountUsage(identityAccountUsageToolFactory()),
+  }
 }
