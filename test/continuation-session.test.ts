@@ -383,11 +383,11 @@ describe("decodeTrailingToolImages", () => {
   it("shares a byte budget across pending results and reports omitted images", async () => {
     const live = fakeSession("bounded-images")
     live.supportsImages = true
-    sessionManager.registerPending(1, live, "read_result", "read")
+    sessionManager.registerPending(1, live, "mcp_result", "badge_a")
     sessionManager.registerPending(2, live, "read_result", "read")
     const results = [1, 2].map(execId => ({
       toolCallId: `cursor_bounded-images_${execId}`, sessionId: live.sessionId, execId,
-      toolName: "read", output: "Image read successfully",
+      toolName: execId === 1 ? "badge_a" : "read", output: "Image read successfully",
       media: [{ type: "file-data", mediaType: "image/png", data: "AQID" }],
     }))
     const decoded = await decodeTrailingToolImages(live, results, undefined, 4)
@@ -510,6 +510,29 @@ describe("deliverContinuationResults", () => {
       imageHashes: ["hash-fail"],
     }])).toBeUndefined()
     expect(snapshotSentHistoryImageHashesForTests("host-image-read-fail")).toEqual([])
+  })
+
+  it("delivers MCP tool images on the held Run instead of waiting for the next user turn", () => {
+    const writes: Uint8Array[] = []
+    const live = fakeSession("mcp-image")
+    live.stream.write = (frame: Uint8Array) => { writes.push(frame) }
+    sessionManager.registerPending(13, live, "mcp_result", "parity_status_badge")
+    const data = Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+
+    expect(deliverContinuationResults(live, [{
+      toolCallId: "cursor_mcp-image_13",
+      sessionId: "mcp-image",
+      execId: 13,
+      toolName: "parity_status_badge",
+      output: "Media attached in the following user message.",
+      images: [{ data, filename: "image-1", mimeType: "image/png" }],
+      imageHashes: ["hash"],
+    }])).toBe(live)
+
+    const content = decodeMessage<any>("AgentClientMessage", writes[0]).exec_client_message.mcp_result.success.content
+    expect(content).toHaveLength(2)
+    expect(Uint8Array.from(content[1].image.data)).toEqual(data)
+    expect(content[1].image.mime_type).toBe("image/png")
   })
 
   it("upgrades a host-authorized external edit read to complete content", () => {
