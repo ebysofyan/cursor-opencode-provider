@@ -16,6 +16,10 @@
 
 ### Fixed
 
+- Recovery Runs remember detached tool images without resending them on later turns; progress-only reopens use the current Run ID for host instruction updates
+- Tool images stay with the correct result; unreadable or oversized images are reported without blocking other results, and recovery retains supported image formats
+- Host instruction updates survive image reads, and declined tool calls return errors instead of successes
+- Images read with the `read` tool reach the model in the same turn instead of a "Media attached" placeholder ([#42](https://github.com/oakimov/cursor-opencode-provider/pull/42) by [@nkoynov](https://github.com/nkoynov))
 - Cursor generations that emit several tool calls in one step now surface them together to OpenCode (instead of finishing after the first), so parallel host tools and subagents can run concurrently ([#44](https://github.com/oakimov/cursor-opencode-provider/issues/44))
 - Tool-step and fresh-turn drain timeouts preserve late Cursor frames; interrupted parallel steps return pending tools without replaying already-started host calls
 - A slow or failed health-check ping on the shared Cursor connection no longer aborts other chats streaming on it with "automatic retry unsafe" ([#47](https://github.com/oakimov/cursor-opencode-provider/pull/47) by [@moritzWa](https://github.com/moritzWa))

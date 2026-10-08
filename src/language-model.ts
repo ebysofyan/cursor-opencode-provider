@@ -35,6 +35,7 @@ import {
   misplacedShellCommand,
   buildToolCallPart,
   buildExecClientMessages,
+  execResultImages,
   buildReadRejectionMessages,
   buildUnsupportedExecDeny,
   classifyMissingReadTarget,
@@ -215,7 +216,13 @@ import {
 import { isCompactionSession } from "./compaction-marker.js"
 import { resolveSessionWorkspaceRoot } from "./session-directory.js"
 import type { SeedHistoryMessage } from "./protocol/request.js"
-import { assertCursorUserImageSupport, extractCursorPromptImages } from "./image-input.js"
+import {
+  assertCursorUserImageSupport,
+  extractCursorPromptImages,
+  extractCursorToolResultImages,
+  MAX_CURSOR_IMAGE_INPUT_BYTES,
+  type CursorImageInput,
+} from "./image-input.js"
 import { getDocumentedCursorModelContext, resolveCursorModelSupportsImages } from "./model-metadata.js"
 import {
   consumeCursorShellResult,
@@ -650,6 +657,11 @@ function rememberSentHistoryImageHashes(sessionKey: string | undefined, hashes: 
   }
 }
 
+/** Test helper: content hashes recorded after a successful held-Run image write. */
+export function snapshotSentHistoryImageHashesForTests(sessionKey: string): string[] {
+  return [...(sentHistoryImageHashesBySession.get(sessionKey) ?? [])]
+}
+
 type V3Part = LanguageModelV3StreamPart
 
 export function createCursorLanguageModel(
@@ -753,7 +765,10 @@ async function doStreamImpl(
     // Write pending results onto the held-open Run. A dead stream closes the
     // session and returns undefined so we fall through to history rebase
     // instead of pumping a connection that can no longer accept writes.
-    session = deliverContinuationResults(session, trailingToolResults, {
+    const results = session.supportsImages
+      ? await decodeTrailingToolImages(session, trailingToolResults, callOptions.abortSignal)
+      : trailingToolResults
+    session = deliverContinuationResults(session, results, {
       hostAgent: hostAgentFromCallOptions(callOptions),
     })
     if (session) await refreshHeldSessionToolCatalog(session, callOptions)
@@ -1354,7 +1369,7 @@ async function startSession(
     )
   }
   const imageExtraction = resuming
-    ? { images: [], hashes: [], candidateCount: 0, duplicateCount: 0, userImageCount: 0 }
+    ? { images: [], hashes: [], candidateCount: 0, duplicateCount: 0, userImageCount: 0, omittedCount: 0 }
     : await extractCursorPromptImages(
         prompt as readonly unknown[],
         lastUser as unknown as Record<string, unknown> | undefined,
@@ -1370,6 +1385,11 @@ async function startSession(
           signal: callOptions.abortSignal,
         },
       )
+  if (imageExtraction.omittedCount) {
+    userText = appendMidConversationMessage(userText,
+      `[${imageExtraction.omittedCount} historical tool image(s) could not be decoded; their pixels are unavailable.]`)
+    trace(`image input: omitted ${imageExtraction.omittedCount} unreadable tool image(s)`)
+  }
   if (!supportsImages && imageExtraction.candidateCount > 0) {
     trace(
       `image input: dropped ${imageExtraction.candidateCount} tool/assistant history image(s); ` +
@@ -1446,7 +1466,9 @@ async function startSession(
   // After compaction or an unsafe checkpoint reset there is no checkpoint —
   // seed a new Cursor conversation from OpenCode's authoritative history.
   const cursorMode = getActiveCursorMode(sessionKey)
+  const runId = crypto.randomUUID()
   const reqBytes = buildRunRequest({
+    messageId: runId,
     text: userText,
     images,
     modelId: cursorModelId,
@@ -1534,6 +1556,7 @@ async function startSession(
 
   const session: CursorSession = {
     sessionId: crypto.randomUUID(),
+    runId,
     conversationId,
     cacheDir,
     resumeCheckpoint: undefined,
@@ -1566,6 +1589,7 @@ async function startSession(
     postCompactionRebase: isCompaction,
     toolCatalog: sessionKey ? snapshotToolCatalog(sessionKey) : structuredClone(tools),
     knownMcpServers,
+    supportsImages,
     stream,
     frames: stream.frames()[Symbol.asyncIterator](),
     pending: new Map(),
@@ -1625,7 +1649,9 @@ async function startSession(
     const next = await bidiRunStream(freshToken, { baseURL: agentBaseUrl, headers: options.headers })
     abortIfNeeded(next)
     const conversationState = session.resumeCheckpoint ?? getCheckpoint(session.conversationId)
+    const nextRunId = crypto.randomUUID()
     const reqBytes = buildRunRequest({
+      messageId: nextRunId,
       text,
       modelId: cursorModelId,
       conversationId: session.conversationId,
@@ -1648,7 +1674,7 @@ async function startSession(
     session.heartbeatCancel?.()
     await waitForStreamWrites(session.stream)
     abortIfNeeded(next)
-    sessionManager.replaceStream(session, next)
+    sessionManager.replaceStream(session, next, nextRunId)
     attachSessionHeartbeat(session)
   }
 
@@ -2246,6 +2272,7 @@ export function deliverContinuationResults(
     let frames: Uint8Array[] = []
     let deliveredSwitchMode: { target: string; bridgeKind?: unknown } | undefined
     let deliveredCreatePlan: { approved: boolean; emulated: boolean } | undefined
+    let deliveredImageHashes: string[] = []
     if (pending.resultField === ASK_QUESTION_RESULT_FIELD) {
       // A bridged Cursor AskQuestion. The host tool result carries the user's
       // choices; translate them back into the Cursor result the interaction is
@@ -2376,16 +2403,24 @@ export function deliverContinuationResults(
           })]
         }
         if (frames.length === 0) {
+          const images = r.error ? [] : execResultImages(pending.resultField, r.images)
           frames = buildExecClientMessages({
             execId: r.execId,
             resultField: pending.resultField,
-            output: shellResult?.output ?? r.output,
+            output: pending.resultField === "read_result" && r.notes && r.output.endsWith(r.notes)
+              ? r.output.slice(0, -r.notes.length).trimEnd()
+              : shellResult?.output ?? r.output,
             error: r.error,
             toolName: pending.toolName ?? r.toolName,
             resultMetadata: pending.resultMetadata,
             shellOutcome: shellResult?.outcome,
             workspaceRoot,
+            images,
           })
+          if (images.length > 0) {
+            deliveredImageHashes = r.imageHashes?.slice(0, images.length) ?? []
+            trace(`continuation: ${images.length} tool-result image(s) on ${pending.resultField} execId=${r.execId}`)
+          }
         }
       } catch (error) {
         trace(`continuation: result encode FAILED execId=${r.execId} err=${(error as Error).message}`)
@@ -2393,12 +2428,26 @@ export function deliverContinuationResults(
         return undefined
       }
     }
+    if (r.notes && !pending.bridged && (pending.resultField === "read_result" || r.error)) {
+      // Native read output is a content/data oneof; typed errors also discard
+      // output text. Inject updates before releasing the waiting executor.
+      frames.unshift(encodeMessage("AgentClientMessage", {
+        conversation_action: { inject_context_action: {
+          injection_id: crypto.randomUUID(),
+          ...(session.runId ? { expected_run_id: session.runId } : {}),
+          system_context: { producer: "opencode", content: r.notes },
+        } },
+      }))
+    }
     const outcome = sessionManager.deliverClaim(claim, frames)
     if (outcome.kind !== "delivered") {
       trace(`continuation: delivery stopped execId=${r.execId} reason=${outcome.reason}`)
       if (outcome.kind === "duplicate") continue
       return undefined
     }
+    // Cursor now holds these in the exec result; the next fresh Run must not
+    // attach them again as history images.
+    rememberSentHistoryImageHashes(session.openCodeSessionId, deliveredImageHashes)
     if (deliveredSwitchMode) {
       const normalized = deliveredSwitchMode.target.toLowerCase()
       setActiveCursorMode(session.openCodeSessionId, deliveredSwitchMode.target, {
@@ -4435,56 +4484,64 @@ function normalizeCheckpointBytes(raw: unknown): Uint8Array | undefined {
 
 // ── Prompt extraction ──
 
-type ExtractedToolResult = {
+type ToolResultContent = {
   toolCallId: string
-  sessionId: string
-  execId: number
   toolName: string
   output: string
   error?: string
+  /** Host media parts of this result (own content, or the trailing media message). */
+  media?: unknown[]
+  /** `media` decoded for the exec result, with content hashes in the same order. */
+  images?: CursorImageInput[]
+  imageHashes?: string[]
+  /** Host updates that a binary read cannot carry in its output oneof. */
+  notes?: string
 }
 
-function extractToolResults(prompt: LanguageModelV3CallOptions["prompt"]): ExtractedToolResult[] {
-  const out: ExtractedToolResult[] = []
+type ExtractedToolResult = ToolResultContent & { sessionId: string; execId: number }
+
+function correlateToolResults(results: ToolResultContent[]): ExtractedToolResult[] {
+  return results.flatMap(result => {
+    const parsed = parseExecIdFromToolCallId(result.toolCallId)
+    return parsed ? [{ ...result, ...parsed }] : []
+  })
+}
+
+function extractToolResultContent(prompt: LanguageModelV3CallOptions["prompt"]): ToolResultContent[] {
+  const out: ToolResultContent[] = []
   for (const msg of prompt) {
     if (msg.role !== "tool" || !Array.isArray(msg.content)) continue
     for (const part of msg.content) {
       const p = part as unknown as Record<string, unknown>
       if (p.type !== "tool-result") continue
       const toolCallId = (p.toolCallId as string) ?? ""
-      const parsed = parseExecIdFromToolCallId(toolCallId)
-      if (!parsed) continue
       const { text, isError } = toolResultOutputToText(p.output)
+      const media = toolResultOutputMedia(p.output)
       out.push({
         toolCallId,
-        sessionId: parsed.sessionId,
-        execId: parsed.execId,
         toolName: (p.toolName as string) ?? "mcp",
         output: text,
         error: isError ? text : undefined,
+        ...(media.length > 0 ? { media } : {}),
       })
     }
   }
   return out
 }
 
-/**
- * Tool results that form a live continuation: only the trailing run of `tool`
- * messages after the last non-tool message. Mid-prompt historical tool results
- * are ignored — they are conversation history, not replies for a held-open Run.
- */
-// OpenCode 2.x appends these host notes after the tool results of a step:
-// mid-turn system updates (skill / MCP availability changes) are lowered to a
-// user message wrapping `<system-update>`, plan-agent guidance uses
-// `<system-reminder>`, and tool-result media is re-sent as a user message
-// starting with this caption.
+function extractToolResults(prompt: LanguageModelV3CallOptions["prompt"]): ExtractedToolResult[] {
+  return correlateToolResults(extractToolResultContent(prompt))
+}
+
+// OpenCode appends host notes after tool results: system updates, plan-agent
+// reminders, and detached tool media with a synthetic caption.
 const SYSTEM_UPDATE_OPEN = "<system-update>"
 const SYSTEM_UPDATE_CLOSE = "</system-update>"
 const SYSTEM_REMINDER_OPEN = "<system-reminder>"
 const SYSTEM_REMINDER_CLOSE = "</system-reminder>"
 const TOOL_MEDIA_CAPTION = "Attached media from tool result:"
 
-type HostTailNote = { text?: string }
+type HostTailNote = { text?: string; media?: unknown[] }
 
 function wrappedHostNote(text: string, open: string, close: string): boolean {
   return text.startsWith(open) && text.endsWith(close)
@@ -4493,8 +4550,8 @@ function wrappedHostNote(text: string, open: string, close: string): boolean {
 function hostTailNote(message: LanguageModelV3CallOptions["prompt"][number]): HostTailNote | undefined {
   if (message.role === "system") return { text: message.content }
   if (message.role !== "user" || !Array.isArray(message.content) || message.content.length === 0) return undefined
-  const [first] = message.content
-  if (first?.type === "text" && first.text === TOOL_MEDIA_CAPTION) return {}
+  const [first, ...media] = message.content
+  if (first?.type === "text" && first.text === TOOL_MEDIA_CAPTION) return { media }
   const texts: string[] = []
   let append = false
   let reminderOnly = false
@@ -4522,35 +4579,136 @@ function hostTailNote(message: LanguageModelV3CallOptions["prompt"][number]): Ho
  * Split off host notes that trail the live tool results. They are not a new
  * user turn: the held Run must still receive its tool results.
  */
-function liveTail(prompt: LanguageModelV3CallOptions["prompt"]): { end: number; notes: string[] } {
+function liveTail(prompt: LanguageModelV3CallOptions["prompt"]): { end: number; notes: string[]; media: unknown[] } {
   let end = prompt.length
   const notes: string[] = []
+  const media: unknown[] = []
   while (end > 0) {
     const note = hostTailNote(prompt[end - 1])
     if (!note) break
     if (note.text) notes.unshift(note.text)
+    if (note.media) media.unshift(...note.media)
     end--
   }
-  return { end, notes }
+  return { end, notes, media }
 }
 
 export function extractTrailingToolResults(
   prompt: LanguageModelV3CallOptions["prompt"],
 ): ExtractedToolResult[] {
-  const { end, notes } = liveTail(prompt)
+  const { end, notes, media } = liveTail(prompt)
   let i = end - 1
   while (i >= 0 && prompt[i].role === "tool") i--
   // Continuations end with tool messages. Anything else (user/assistant)
   // means this is a fresh model call that merely carries tools in history.
   if (i === end - 1) return []
-  const results = extractToolResults(prompt.slice(i + 1, end))
+  const contents = extractToolResultContent(prompt.slice(i + 1, end))
+  // Detached media includes host-owned calls too; filter correlation only
+  // after attribution so their attachments cannot migrate to our execs.
+  if (media.length > 0) attributeTrailingMedia(contents, media)
+  const results = correlateToolResults(contents)
   // A Run continuation only carries exec results, so the host notes ride on the
   // last one; otherwise Cursor would never see e.g. a removed skill.
   const last = results.at(-1)
   if (last && notes.length > 0) {
-    results[results.length - 1] = { ...last, output: [last.output, ...notes].filter(Boolean).join("\n\n") }
+    results[results.length - 1] = {
+      ...last, output: [last.output, ...notes].filter(Boolean).join("\n\n"), notes: notes.join("\n\n"),
+    }
   }
   return results
+}
+
+// OpenCode 2 replaces a tool result that was only media with this text, and
+// its read tool answers an image or PDF with one of the others plus one file.
+const TOOL_MEDIA_PLACEHOLDER = "Media attached in the following user message."
+const MEDIA_READ_OUTPUTS = new Set(["Image read successfully", "PDF read successfully"])
+
+/**
+ * Detached media loses tool ids. Only attribute slices whose boundaries are
+ * uniquely determined by OpenCode's read/placeholder markers and result order.
+ * Opaque tools may return any number of images; text alone proves no ownership.
+ */
+function attributeTrailingMedia(results: ToolResultContent[], media: unknown[]): void {
+  if (results.length === 0) return
+  if (results.length === 1) {
+    if (results[0]!.toolName === "read" && !MEDIA_READ_OUTPUTS.has(results[0]!.output)) return
+    results[0]!.media = [...(results[0]!.media ?? []), ...media]
+    return
+  }
+  const bounds = results.map(result => {
+    if (result.toolName === "read") {
+      const count = MEDIA_READ_OUTPUTS.has(result.output) ? 1 : 0
+      return { min: count, max: count }
+    }
+    if (result.output === TOOL_MEDIA_PLACEHOLDER) return { min: 1, max: media.length }
+    // These canonical tools have text output only. Opaque MCP tools remain
+    // unconstrained, even if another tool also returned descriptive text.
+    if (["glob", "grep", "ls", "edit", "write", "apply_patch", "todowrite", "todoread"].includes(result.toolName)) {
+      return { min: 0, max: 0 }
+    }
+    return { min: 0, max: media.length }
+  })
+  const sumMin = bounds.reduce((sum, bound) => sum + bound.min, 0)
+  const sumMax = bounds.reduce((sum, bound) => sum + bound.max, 0)
+  if (sumMin > media.length || sumMax < media.length) {
+    trace("continuation: detached media does not match result markers; retaining history fallback")
+    return
+  }
+  let prefixMin = 0
+  let prefixMax = 0
+  results.forEach((result, index) => {
+    const bound = bounds[index]!
+    const suffixMin = sumMin - prefixMin - bound.min
+    const suffixMax = sumMax - prefixMax - bound.max
+    const startMin = Math.max(prefixMin, media.length - suffixMax - bound.max)
+    const startMax = Math.min(prefixMax, media.length - suffixMin - bound.min)
+    const endMin = Math.max(prefixMin + bound.min, media.length - suffixMax)
+    const endMax = Math.min(prefixMax + bound.max, media.length - suffixMin)
+    if (startMin === startMax && endMin === endMax && endMin > startMin) {
+      result.media = [...(result.media ?? []), ...media.slice(startMin, endMin)]
+    } else if (bound.max > 0 && (startMin !== startMax || endMin !== endMax)) {
+      result.output += "\n\n[Detached tool media has ambiguous ownership; images remain available in history.]"
+      trace(`continuation: ambiguous detached media owner tool=${result.toolName}`)
+    }
+    prefixMin += bound.min
+    prefixMax += bound.max
+  })
+}
+
+/** Decode only image-bearing pending execs, under one continuation-wide budget. */
+export async function decodeTrailingToolImages(
+  session: CursorSession,
+  results: ExtractedToolResult[],
+  signal?: AbortSignal,
+  maxBytes = MAX_CURSOR_IMAGE_INPUT_BYTES,
+): Promise<ExtractedToolResult[]> {
+  const decoded: ExtractedToolResult[] = []
+  let remaining = Math.min(MAX_CURSOR_IMAGE_INPUT_BYTES, Math.max(0, maxBytes))
+  for (const result of results) {
+    signal?.throwIfAborted()
+    const pending = result.sessionId === session.sessionId ? session.pending.get(result.execId) : undefined
+    if (!session.supportsImages || result.error || !result.media?.length || !pending || pending.bridged
+      || pending.resultField !== "read_result") {
+      decoded.push(result)
+      continue
+    }
+    const { images, hashes, omittedCount } = await extractCursorToolResultImages(result.media, {
+      signal, maxBytes: remaining, maxImages: pending.resultField === "read_result" ? 1 : undefined,
+    })
+    remaining -= images.reduce((total, image) => total + image.data.length, 0)
+    const notice = omittedCount > 0
+      ? `[${omittedCount} tool-result image(s) omitted: decoding failed or the attachment budget was exceeded.]`
+      : undefined
+    decoded.push({
+      ...result, images, imageHashes: hashes,
+      ...(notice ? {
+        output: `${result.output}\n\n${notice}`,
+        notes: [result.notes, notice].filter(Boolean).join("\n\n"),
+        ...(pending.resultField === "read_result" && images.length === 0 ? { error: notice } : {}),
+      } : {}),
+    })
+  }
+  return decoded
 }
 
 /** Detect a host-owned canonical plan review, excluding Cursor exec replies. */
@@ -4577,7 +4735,10 @@ function toolResultOutputToText(output: unknown): { text: string; isError: boole
   if (typeof output === "string") return { text: output, isError: false }
   const o = output as Record<string, unknown>
   // LanguageModelV3 tool-result output: { type: "text"|"json"|"error-text"|..., value }
-  const isError = typeof o.type === "string" && (o.type as string).startsWith("error")
+  const isError = o.type === "execution-denied" || (typeof o.type === "string" && o.type.startsWith("error"))
+  if (o.type === "execution-denied") {
+    return { text: String(o.reason ?? "Tool execution denied"), isError: true }
+  }
   if (o.type === "text" || o.type === "error-text") {
     return { text: String(o.value ?? ""), isError }
   }
@@ -4585,10 +4746,10 @@ function toolResultOutputToText(output: unknown): { text: string; isError: boole
     return { text: JSON.stringify(o.value ?? null), isError }
   }
   if (o.type === "content" && Array.isArray(o.value)) {
-    // Held-open continuation exec frames are text-only. Media is intentionally
-    // omitted here and harvested from the full prompt when a fresh Run opens.
+    // Media is returned separately by toolResultOutputMedia.
     const text = o.value
       .map((c) => {
+        if (!c || typeof c !== "object") return ""
         const cp = c as Record<string, unknown>
         return cp.type === "text" ? String(cp.text ?? "") : ""
       })
@@ -4596,6 +4757,13 @@ function toolResultOutputToText(output: unknown): { text: string; isError: boole
     return { text, isError }
   }
   return { text: JSON.stringify(output), isError }
+}
+
+function toolResultOutputMedia(output: unknown): unknown[] {
+  if (!output || typeof output !== "object") return []
+  const o = output as Record<string, unknown>
+  if (o.type !== "content" || !Array.isArray(o.value)) return []
+  return o.value.filter((part) => !!part && typeof part === "object" && (part as Record<string, unknown>).type !== "text")
 }
 
 function extractSystemPrompt(prompt: LanguageModelV3CallOptions["prompt"]): string | undefined {
@@ -5332,6 +5500,7 @@ export function resetTurnStateForTests(): void {
   postCompactionRebaseBySession.clear()
   promptIdentityBySession.clear()
   mirroredTodosBySession.clear()
+  sentHistoryImageHashesBySession.clear()
   resetContextEpochsForTests()
   resetFrozenRequestContextsForTests()
 }

@@ -176,6 +176,8 @@ export type CursorSession = {
    * (Cursor resets them per stream) can't cross-deliver results.
    */
   sessionId: string
+  /** AgentRunRequest.run_id, for context injections bound to this Run. */
+  runId?: string
   /**
    * Cursor conversation_id for this Run — used to store/echo
    * conversation_checkpoint_update (CLI parity).
@@ -233,6 +235,8 @@ export type CursorSession = {
   toolCatalog?: OpencodeToolDef[]
   /** Configured MCP server ids used to split flattened host tool names. */
   knownMcpServers?: string[]
+  /** The Run's model accepts images, so held-Run exec results may carry them. */
+  supportsImages?: boolean
   stream: BidiStream
   frames: AsyncIterator<Frame>
   /** An iterator read retained across an idle-guard timeout. */
@@ -717,7 +721,7 @@ export class SessionManager {
    * Callers must cancel the session heartbeat and wait for the old stream's
    * write chain before this, so an in-flight heartbeat cannot close the session.
    */
-  replaceStream(session: CursorSession, next: BidiStream): void {
+  replaceStream(session: CursorSession, next: BidiStream, runId?: string): void {
     if (session.closed) throw new CursorProtocolError("Cannot replace stream on a closed Cursor session")
     session.heartbeatCancel?.()
     session.terminalUnsubscribe?.()
@@ -725,6 +729,7 @@ export class SessionManager {
     session.deferredTerminalReason = null
     const old = session.stream
     session.stream = next
+    if (runId !== undefined) session.runId = runId
     session.frames = next.frames()[Symbol.asyncIterator]()
     session.pendingFrameRead = undefined
     session.pushbackFrame = undefined
