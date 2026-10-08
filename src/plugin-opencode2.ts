@@ -27,6 +27,11 @@ import {
 } from "./opencode2/integration.js"
 import { exposeDirectMcpTools, rememberDirectMcpNamespaces } from "./opencode2/mcp-direct.js"
 import { registerTodoTools } from "./opencode2/todo-tools.js"
+import {
+  createAccountUsageCacheFor,
+  registerCursorAccountUsageTool,
+} from "./opencode2/account-usage-tool.js"
+import { registerCursorAccountUsageRpc } from "./opencode2/account-usage-rpc.js"
 import { registerCursorImageSaveTool } from "./opencode2/image-save-tool.js"
 import { OPENCODE_2_TOOL_DIALECT } from "./protocol/tools.js"
 import { clearSessionTodos } from "./todo-store.js"
@@ -174,8 +179,19 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
     }
 
     const registrations: Array<{ dispose: () => Promise<void> }> = []
+    // If any registration fails, dispose the ones this setup already added
+    // (reverse order, mirroring the returned cleanup) before rethrowing: a
+    // failed setup must not leak partial registrations the host will never
+    // clean up.
     const track = async (p: Promise<{ dispose: () => Promise<void> }>) => {
-      registrations.push(await p)
+      try {
+        registrations.push(await p)
+      } catch (error) {
+        for (const registration of registrations.reverse()) {
+          await registration.dispose().catch(() => {})
+        }
+        throw error
+      }
     }
 
     let models: ModelInfo[] = []
@@ -199,6 +215,11 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
       })
       return tokenInflight
     }
+
+    // ── Account usage (tool + TUI RPC share one cache) ─────
+    // One cache per setup: the tool and the TUI RPC handler read the same
+    // snapshots, and the bearer always resolves through the host integration.
+    const accountUsageCache = createAccountUsageCacheFor(ctx.integration)
 
     const refreshSourceConnection = async (): Promise<void> => {
       try {
@@ -316,6 +337,7 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
 
     await track(
       ctx.tool.transform((draft) => {
+        registerCursorAccountUsageTool(draft, { cache: accountUsageCache })
         // OpenCode 2 dropped host todowrite/todoread. Off by default
         // (`CURSOR_OPENCODE2_TODOS=1`/`true` force-enables). When on, register
         // them as direct catalog tools (`codemode: false` + output schema) if
@@ -329,6 +351,11 @@ const plugin: Plugin2 & { server: typeof CursorPlugin } = {
         exposeDirectMcpTools(draft, directMcpNamespaces)
       }),
     )
+
+    // ── Account usage RPC (TUI bridge; server-side auth only) ──
+    if (ctx.rpc) {
+      await track(registerCursorAccountUsageRpc(ctx.rpc, { cache: accountUsageCache }))
+    }
 
     // ── Shell timeout wrapper ────────────────────────────────
     await track(

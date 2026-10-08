@@ -161,3 +161,41 @@ void (() =>
       execute: async () => [],
     })
   }))
+
+// ── Account usage (P5/P6) ──────────────────────────────────────────────
+
+import {
+  createAccountUsageCacheFor,
+  registerCursorAccountUsageTool,
+} from "../src/opencode2/account-usage-tool.js"
+import { registerCursorAccountUsageRpc } from "../src/opencode2/account-usage-rpc.js"
+import { CursorAccountUsageOpenCode2TuiPlugin } from "../src/opencode2/account-usage-tui.js"
+import type { HostTuiContext } from "./opencode2-host-contract.js"
+
+declare const usageIntegration: HostPluginContext["integration"]
+const usageCache = createAccountUsageCacheFor(usageIntegration)
+
+// Tool registration inside a host tool transform, mirroring plugin setup.
+void (() =>
+  ctx.tool.transform((draft) => {
+    registerCursorAccountUsageTool(draft, { cache: usageCache })
+  }))()
+
+// RPC registration when the host exposes an rpc domain.
+void (async () => {
+  if (ctx.rpc) {
+    await ctx.rpc.register(
+      {
+        id: "cursor-opencode-provider.account-usage",
+        methods: { usage: { input: undefined, output: undefined } },
+        events: {},
+      },
+      { usage: async () => ({ status: "ok" }) },
+    )
+    await registerCursorAccountUsageRpc(ctx.rpc, { cache: usageCache })
+  }
+})()
+
+// TUI plugin must typecheck against the duck-typed host TUI context.
+declare const tuiCtx: HostTuiContext
+void CursorAccountUsageOpenCode2TuiPlugin(tuiCtx as never)

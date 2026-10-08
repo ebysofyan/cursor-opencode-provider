@@ -804,7 +804,7 @@ describe("opencode2 setup", () => {
       options?: { codemode?: boolean }
     }> = []
     transforms.get("tool")!({ add: (tool: { name: string; output?: unknown; options?: { codemode?: boolean } }) => tools.push(tool) })
-    expect(tools.map((tool) => tool.name)).toEqual(["cursor_image_save"])
+    expect(tools.map((tool) => tool.name)).toEqual(["cursor_usage", "cursor_image_save"])
     expect(tools[0]?.options?.codemode).toBe(false)
     expect(tools[0]?.output).toBeDefined()
   })
@@ -819,8 +819,8 @@ describe("opencode2 setup", () => {
         ? { id: "websearch", name: "websearch", description: "", input: {}, execute: async () => ({}) }
         : undefined,
     })
-    expect(tools.map((t) => t.name)).toEqual(["cursor_image_save"])
-    expect(tools[0]?.options).toEqual({ codemode: false, permission: "edit" })
+    expect(tools.map((t) => t.name)).toEqual(["cursor_usage", "cursor_image_save"])
+    expect(tools[0]?.options).toEqual({ codemode: false })
     expect(tools.map((t) => t.name)).not.toContain("custom_websearch")
   })
 
@@ -1491,6 +1491,24 @@ describe("opencode2 setup", () => {
     }
     await hooks.get("session.generate")!(event)
     expect(event.options.opencodeCompaction).toBe(false)
+  })
+
+  test("rolls back every registration in reverse order when a later one fails", async () => {
+    const { ctx, registered, disposed } = fakeContext()
+    ctx.rpc = {
+      register: async () => {
+        throw new Error("rpc registration failed")
+      },
+    }
+    let error: unknown
+    try {
+      await plugin.setup(ctx)
+    } catch (caught) {
+      error = caught
+    }
+    expect((error as Error | undefined)?.message).toBe("rpc registration failed")
+    expect(registered.length).toBeGreaterThan(0)
+    expect(disposed).toEqual([...registered].reverse())
   })
 
   test("session.title explicitly clears the request-local compaction option", async () => {

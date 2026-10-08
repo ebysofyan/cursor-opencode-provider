@@ -68,6 +68,24 @@ export type HostProviderRecord = {
   readonly sourceConnection?: HostConnectionInfo
 }
 
+/** Runtime `Rpc.define` definition shape (installed `@opencode/schema/rpc`). */
+export type HostRpcContract = {
+  readonly id: string
+  readonly methods: Readonly<Record<string, {
+    readonly input: unknown
+    readonly output: unknown
+    readonly errors?: Readonly<Record<string, unknown>>
+  }>>
+  readonly events: Readonly<Record<string, unknown>>
+}
+
+export type HostRpcDomain = {
+  readonly register: (
+    contract: HostRpcContract,
+    handlers: Readonly<Record<string, (input: any) => Promise<any>>>,
+  ) => Promise<HostRegistration>
+}
+
 export type HostToolContext = {
   readonly sessionID: string
   readonly agent: string
@@ -152,6 +170,7 @@ export type HostPluginContext = {
     readonly reload: () => Promise<void>
   }
   readonly location: { readonly directory: string }
+  readonly rpc?: HostRpcDomain
   readonly session: {
     readonly hook: HostModelHooks<{
       context: {
@@ -322,5 +341,56 @@ export type HostPluginContext = {
         | { readonly status: "error"; error: any }
       )
     }>
+  }
+}
+
+/**
+ * OpenCode 2.0 TUI plugin context — a separate process with a client proxy,
+ * keymap, and UI primitives. Mirrors the reference integration's TUI plugin
+ * context (`@opencode/plugin/tui/context`); runtime code duck-types this in
+ * `src/opencode2/account-usage-tui.ts`.
+ */
+export type HostTuiToastOptions = {
+  readonly title?: string
+  readonly message: string
+  readonly variant?: "info" | "success" | "warning" | "error"
+  readonly duration?: number
+}
+
+export type HostTuiCommand = {
+  readonly id: string
+  readonly title: string
+  readonly description: string
+  readonly group?: string
+  readonly bind?: string
+  readonly palette?: boolean
+  readonly slash?: { readonly name: string }
+  readonly run: () => Promise<void> | void
+}
+
+export type HostTuiKeymapLayer = {
+  readonly mode: string
+  readonly priority?: number
+  readonly bindings?: readonly string[]
+  readonly commands: readonly HostTuiCommand[]
+}
+
+export type HostTuiContext = {
+  readonly client: {
+    readonly rpc: (contract: HostRpcContract) => {
+      readonly [method: string]: (input: any) => Promise<any>
+    }
+  }
+  readonly keymap: {
+    readonly layer: (factory: () => HostTuiKeymapLayer) => unknown
+  }
+  readonly ui: {
+    readonly slot: (options: {
+      readonly append: string
+      readonly render: () => unknown
+    }) => unknown
+    readonly toast: {
+      readonly show: (toast: HostTuiToastOptions) => void
+    }
   }
 }

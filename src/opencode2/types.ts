@@ -423,6 +423,30 @@ export type SkillInfo = {
   readonly path: string
 }
 
+export type RpcMethodContract = {
+  readonly input: unknown
+  readonly output: unknown
+  readonly errors?: Readonly<Record<string, unknown>>
+}
+
+/**
+ * Runtime `Rpc.define` definition shape (installed `@opencode/schema/rpc`):
+ * `{ id, methods, events }` with `events` mandatory. The repo duck-types this
+ * surface and must not import `@opencode/plugin`.
+ */
+export type RpcContract = {
+  readonly id: string
+  readonly methods: Readonly<Record<string, RpcMethodContract>>
+  readonly events: Readonly<Record<string, unknown>>
+}
+
+export type RpcDomain = {
+  readonly register: (
+    contract: RpcContract,
+    handlers: Readonly<Record<string, (input: any) => Promise<any>>>,
+  ) => Promise<Registration>
+}
+
 export type SkillDomain = {
   readonly list: () => Promise<{
     readonly location: { readonly directory: string }
@@ -446,6 +470,7 @@ export type PluginContext = {
   readonly websearch?: WebSearchDomain
   readonly mcp?: McpDomain
   readonly skill?: SkillDomain
+  readonly rpc?: RpcDomain
 }
 
 export type Cleanup = () => Promise<void> | void
